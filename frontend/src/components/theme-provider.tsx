@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 
-type Theme = 'dark' | 'light' | 'system';
+export type Theme = 'dark' | 'light' | 'system';
 
 interface ThemeProviderProps {
   children: React.ReactNode;
@@ -17,42 +17,65 @@ interface ThemeProviderState {
 
 const ThemeProviderContext = React.createContext<ThemeProviderState | undefined>(undefined);
 
+function getSystemPreference(): Theme {
+  if (typeof window === 'undefined') return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function getInitialTheme(storageKey: string, defaultTheme: Theme): Theme {
+  if (typeof window !== 'undefined') {
+    const stored = localStorage.getItem(storageKey) as Theme | null;
+    if (stored && stored !== 'system') return stored;
+    if (stored === 'system') return getSystemPreference();
+  }
+  return defaultTheme === 'system' ? getSystemPreference() : defaultTheme;
+}
+
 export function ThemeProvider({
   children,
   defaultTheme = 'system',
   storageKey = 'niffyinsur-theme',
   ...props
 }: ThemeProviderProps) {
-  const [theme, setTheme] = React.useState<Theme>(
-    () => (typeof window !== 'undefined' ? (localStorage.getItem(storageKey) as Theme) : defaultTheme) || defaultTheme
+  const [theme, setThemeState] = React.useState<Theme>(
+    () => getInitialTheme(storageKey, defaultTheme)
   );
 
   React.useEffect(() => {
     const root = window.document.documentElement;
-
     root.classList.remove('light', 'dark');
 
     if (theme === 'system') {
-      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'dark'
-        : 'light';
-
+      const systemTheme = getSystemPreference();
       root.classList.add(systemTheme);
-      return;
+    } else {
+      root.classList.add(theme);
     }
-
-    root.classList.add(theme);
   }, [theme]);
 
+  React.useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = () => {
+      const stored = localStorage.getItem(storageKey) as Theme | null;
+      if (stored === 'system') {
+        setThemeState(getSystemPreference());
+      }
+    };
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, [storageKey]);
+
+  const setTheme = React.useCallback(
+    (newTheme: Theme) => {
+      localStorage.setItem(storageKey, newTheme);
+      setThemeState(newTheme);
+    },
+    [storageKey]
+  );
+
   const value = React.useMemo(
-    () => ({
-      theme,
-      setTheme: (theme: Theme) => {
-        localStorage.setItem(storageKey, theme);
-        setTheme(theme);
-      },
-    }),
-    [theme, storageKey]
+    () => ({ theme, setTheme }),
+    [theme, setTheme]
   );
 
   return (

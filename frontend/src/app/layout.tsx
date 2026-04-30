@@ -81,16 +81,31 @@ export const metadata: Metadata = {
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  // Read the nonce injected by middleware.ts so Next.js inline scripts
-  // (chunk loader, __NEXT_DATA__) satisfy the nonce-based CSP.
   const nonce = (await headers()).get('x-nonce') ?? undefined
 
   return (
-    <html lang="en" className={`${inter.variable} ${ibmPlexMono.variable}`}>
+    <html lang="en" className={`${inter.variable} ${ibmPlexMono.variable}`} suppressHydrationWarning>
       <head nonce={nonce}>
         <link rel="icon" href="/favicon.ico" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <link rel="manifest" href="/site.webmanifest" />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                try {
+                  var storageKey = 'niffyinsur-theme';
+                  var theme = localStorage.getItem(storageKey);
+                  var resolved = theme;
+                  if (theme === 'system' || theme === null) {
+                    resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                  }
+                  document.documentElement.classList.add(resolved);
+                } catch (e) {}
+              })();
+            `,
+          }}
+        />
       </head>
       <body className="font-sans antialiased">
         <ThemeProvider defaultTheme="system" storageKey="niffyinsur-theme">
