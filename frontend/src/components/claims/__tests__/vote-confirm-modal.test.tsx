@@ -132,7 +132,7 @@ describe('VoteConfirmModal', () => {
     
     // Prominent vote display should be present
     expect(screen.getByText(/you are voting to/i)).toBeInTheDocument()
-    expect(screen.getByText(/APPROVE/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/APPROVE/i).length).toBeGreaterThan(0)
     
     // Icon should be present for visual prominence
     const dialog = screen.getByRole('dialog')

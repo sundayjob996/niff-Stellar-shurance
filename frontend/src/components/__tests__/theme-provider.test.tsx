@@ -174,16 +174,19 @@ describe('ThemeToggle', () => {
   })
 
   it('cycles from system back to light on click', () => {
-    localStorage.setItem(STORAGE_KEY, 'system')
     render(
-      <ThemeProvider>
+      <ThemeProvider defaultTheme="dark">
         <ThemeToggle />
         <TestConsumer />
       </ThemeProvider>
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /switch to light theme/i }))
+    // dark → system
+    fireEvent.click(screen.getByRole('button', { name: /switch to system theme/i }))
+    expect(screen.getByTestId('current-theme')).toHaveTextContent('system')
 
+    // system → light
+    fireEvent.click(screen.getByRole('button', { name: /switch to light theme/i }))
     expect(screen.getByTestId('current-theme')).toHaveTextContent('light')
   })
 

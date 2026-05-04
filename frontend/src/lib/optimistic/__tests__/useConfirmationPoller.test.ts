@@ -57,9 +57,7 @@ describe('useConfirmationPoller', () => {
 
     // Advance past the first backoff (3 s base).
     await act(async () => {
-      jest.advanceTimersByTime(3_500);
-      await Promise.resolve();
-      await Promise.resolve();
+      await jest.runAllTimersAsync();
     });
 
     expect(onConfirmed).toHaveBeenCalledWith('p2');

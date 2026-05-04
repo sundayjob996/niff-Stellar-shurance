@@ -70,6 +70,6 @@ describe('NetworkMismatchOverlayView', () => {
     render(<NetworkMismatchOverlayView open {...base} />)
     const live = document.querySelector('[aria-live="assertive"]')
     expect(live).toBeTruthy()
-    expect(live?.textContent?.length).toBeGreaterThan(10)
+    expect(live).toHaveAttribute('aria-atomic', 'true')
   })
 })

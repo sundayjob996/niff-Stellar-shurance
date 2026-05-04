@@ -22,35 +22,54 @@ jest.mock('next/navigation', () => ({
   usePathname: () => '/',
 }))
 
+// Mock wallet hook to avoid WalletProvider requirement
+jest.mock('@/hooks/use-wallet', () => ({
+  useWallet: () => ({
+    address: null,
+    connectionStatus: 'disconnected',
+    contractIds: {},
+  }),
+}))
+
+// Mock useLatestLedger
+jest.mock('@/hooks/use-latest-ledger', () => ({
+  useLatestLedger: () => 0,
+}))
+
+// Mock useOptimisticPolicies
+jest.mock('@/features/policies/hooks/useOptimisticPolicies', () => ({
+  useOptimisticPolicies: () => ({
+    policies: [],
+    mergedPolicies: [],
+    total: 0,
+    pageIndex: 0,
+    hasNextPage: false,
+    hasPrevPage: false,
+    loading: false,
+    error: null,
+    goToPage: jest.fn(),
+    retry: jest.fn(),
+    applyOptimisticPolicy: jest.fn(),
+    entries: new Map(),
+    confirm: jest.fn(),
+    rollback: jest.fn(),
+  }),
+  PolicyConfirmationPoller: () => null,
+}))
+
 describe('Empty State Integration Tests', () => {
   describe('Policies Empty State', () => {
     it('renders when API returns zero policies', async () => {
-      // Mock the policies API to return empty array
       const { PolicyDashboard } = await import('@/features/policies/components/PolicyDashboard')
-      
-      // Mock usePolicies hook
-      jest.mock('@/features/policies/hooks/usePolicies', () => ({
-        usePolicies: () => ({
-          policies: [],
-          loading: false,
-          error: null,
-          total: 0,
-          retry: jest.fn(),
-        }),
-      }))
-
       render(<PolicyDashboard />)
-
-      // Verify empty state is rendered
+      // With mocked useOptimisticPolicies returning empty array, empty state renders
       expect(screen.getByRole('status')).toBeInTheDocument()
-      expect(screen.getByText(/no policies/i)).toBeInTheDocument()
+      expect(screen.getByText(/don't have any policies/i)).toBeInTheDocument()
     })
 
     it('CTA navigates to policy purchase page', async () => {
       const { PolicyDashboard } = await import('@/features/policies/components/PolicyDashboard')
-      
       render(<PolicyDashboard />)
-
       const ctaLink = screen.queryByRole('link', { name: /purchase/i })
       if (ctaLink) {
         expect(ctaLink).toHaveAttribute('href', expect.stringContaining('/policies'))

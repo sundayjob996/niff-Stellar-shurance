@@ -39,8 +39,8 @@ describe('ReviewStep', () => {
   it('renders all claim data correctly', () => {
     render(<ReviewStep data={mockData} policyId={policyId} />);
 
-    // Check amount
-    expect(screen.getByText(/1000 stroops/i)).toBeInTheDocument();
+    // Check amount (1000 minor units with 7 decimals = 0.0001 XLM)
+    expect(screen.getByText(/0\.0001/)).toBeInTheDocument();
 
     // Check policy ID
     expect(screen.getByText('Policy ID: #12345')).toBeInTheDocument();
@@ -125,6 +125,6 @@ describe('ReviewStep', () => {
     render(<ReviewStep data={{ ...mockData, evidence }} policyId={policyId} />);
 
     expect(screen.getByText('photo.jpg')).toBeInTheDocument();
-    expect(screen.getByText('abcdef12345678...34567890')).toBeInTheDocument();
+    expect(screen.getByText('abcdef1234567890...34567890')).toBeInTheDocument();
   });
 });

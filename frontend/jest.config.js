@@ -2,6 +2,8 @@ const nextJest = require("next/jest.js");
 
 const createJestConfig = nextJest({ dir: "./" });
 
+const ESM_PACKAGES = ["@creit\\.tech", "@stellar", "@preact", "preact", "htm", "@twind"].join("|");
+
 /** @type {import('jest').Config} */
 const config = {
   testEnvironment: "jest-environment-jsdom",
@@ -17,9 +19,17 @@ const config = {
       tsconfig: "<rootDir>/tsconfig.test.json",
     },
   },
-  transformIgnorePatterns: [
-    "/node_modules/(?!(@creit\\.tech|@stellar)/)",
-  ],
 };
 
-module.exports = createJestConfig(config);
+// nextJest sets its own transformIgnorePatterns; override after merge.
+async function jestConfig() {
+  const nextConfig = await createJestConfig(config)();
+  return {
+    ...nextConfig,
+    transformIgnorePatterns: [
+      `/node_modules/(?!(${ESM_PACKAGES})/)`,
+    ],
+  };
+}
+
+module.exports = jestConfig;
