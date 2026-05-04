@@ -9,10 +9,12 @@ import { getNetworkConfig } from "../config/network.config";
 import { filterHorizonOperations } from "./filters/horizon-field.filter";
 import { HorizonTransactionResponse } from "./dto/horizon-transaction.dto";
 import { RedisService } from "../cache/redis.service";
-import { HorizonRateLimitService } from "./horizon-rate-limit.service";
 
 const CACHE_TTL_SECONDS = 15;
 const CACHE_PREFIX = "horizon:txcache:";
+const RL_KEY_PREFIX = "horizon:rl:";
+const RL_WINDOW_MS = 60_000;
+const RL_MAX_REQUESTS = 30;
 
 /**
  * Stellar address format: 56 uppercase alphanumeric characters starting with G.
@@ -23,15 +25,47 @@ const STELLAR_ADDRESS_RE = /^G[A-Z0-9]{55}$/;
 export class HorizonService {
   private readonly logger = new Logger(HorizonService.name);
   private readonly horizonUrl: string;
+  private readonly maxRequests: number;
+  private readonly windowMs: number;
 
   constructor(
     private readonly config: ConfigService,
     private readonly redis: RedisService,
-    private readonly rateLimitService: HorizonRateLimitService,
   ) {
-    // Resolve from network config (supports per-network overrides)
     const networkConfig = getNetworkConfig();
     this.horizonUrl = networkConfig.horizonUrl;
+    this.maxRequests = this.config.get<number>("HORIZON_RATE_LIMIT_MAX", RL_MAX_REQUESTS);
+    this.windowMs = this.config.get<number>("HORIZON_RATE_LIMIT_WINDOW_MS", RL_WINDOW_MS);
+  }
+
+  async checkRateLimit(account: string): Promise<{ allowed: boolean; retryAfterSeconds: number }> {
+    const key = `${RL_KEY_PREFIX}${account}`;
+    const now = Date.now();
+    const windowStart = now - this.windowMs;
+    const member = `${now}-${Math.random()}`;
+
+    try {
+      const client = this.redis.getClient();
+      const pipeline = client.multi();
+      pipeline.zremrangebyscore(key, "-inf", String(windowStart));
+      pipeline.zcard(key);
+      pipeline.zadd(key, now, member);
+      pipeline.expire(key, Math.ceil(this.windowMs / 1000));
+      const results = await pipeline.exec();
+      const count = (results?.[1]?.[1] as number) ?? 0;
+
+      if (count >= this.maxRequests) {
+        const oldest = await client.zrange(key, 0, 0, "WITHSCORES");
+        const oldestTs = oldest?.[1] ? Number(oldest[1]) : now;
+        const retryAfterSeconds = Math.max(1, Math.ceil((oldestTs + this.windowMs - now) / 1000));
+        return { allowed: false, retryAfterSeconds };
+      }
+
+      return { allowed: true, retryAfterSeconds: 0 };
+    } catch (err) {
+      this.logger.warn(`Rate limit check failed for ${account}: ${err}`);
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
   }
 
   async getTransactions(
@@ -46,7 +80,6 @@ export class HorizonService {
     const clampedLimit = Math.min(Math.max(1, limit), 200);
     const cacheKey = `${CACHE_PREFIX}${account}:${cursor ?? "start"}:${clampedLimit}`;
 
-    // Check short-lived cache — do not cache beyond 15 s (finality lag window)
     const cached = await this.redis.get<HorizonTransactionResponse>(cacheKey);
     if (cached) {
       this.logger.debug(`Cache hit for ${account}`);
@@ -64,7 +97,6 @@ export class HorizonService {
       ...(nextCursor ? { next_cursor: nextCursor } : {}),
     };
 
-    // Cache filtered response — never the raw Horizon payload
     await this.redis.set(cacheKey, response, CACHE_TTL_SECONDS);
 
     return response;
@@ -84,8 +116,6 @@ export class HorizonService {
     try {
       const headers: Record<string, string> = {
         Accept: "application/json",
-        // Never forward client-supplied headers here — Horizon API keys
-        // are injected server-side only if HORIZON_API_KEY is set.
         ...(this.getHorizonApiKey()
           ? { Authorization: `Bearer ${this.getHorizonApiKey()}` }
           : {}),

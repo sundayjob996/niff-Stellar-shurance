@@ -10,24 +10,18 @@ import {
 } from "@nestjs/common";
 import type { Response } from "express";
 import { HorizonService } from "./horizon.service";
-import { HorizonRateLimitService } from "./horizon-rate-limit.service";
 import { HorizonTransactionResponse } from "./dto/horizon-transaction.dto";
 
 @Controller("horizon")
 export class HorizonController {
   private readonly logger = new Logger(HorizonController.name);
 
-  constructor(
-    private readonly horizonService: HorizonService,
-    private readonly rateLimitService: HorizonRateLimitService,
-  ) {}
+  constructor(private readonly horizonService: HorizonService) {}
 
   /**
    * GET /api/horizon/transactions?account=<address>&cursor=<paging_token>&limit=<n>
    *
    * Proxies operation history from Horizon filtered to payment-relevant types.
-   * API keys are never forwarded to the client in response headers or error bodies.
-   *
    * Rate limited to 30 requests per 60 seconds per wallet address.
    */
   @Get("transactions")
@@ -50,7 +44,7 @@ export class HorizonController {
       throw new HttpException("limit must be a number", HttpStatus.BAD_REQUEST);
     }
 
-    const rl = await this.rateLimitService.check(account);
+    const rl = await this.horizonService.checkRateLimit(account);
     if (!rl.allowed) {
       res?.setHeader("Retry-After", String(rl.retryAfterSeconds));
       throw new HttpException(
