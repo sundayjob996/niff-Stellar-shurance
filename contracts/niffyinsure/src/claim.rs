@@ -288,6 +288,7 @@ pub fn file_claim(
     }
 
     crate::validate::check_claim_fields(env, amount, policy.coverage, details, evidence)?;
+    crate::rolling_claim_cap::check_file_claim(env, holder, policy_id, amount, now)?;
 
     let deductible_snapshot = policy.deductible.unwrap_or(0);
 
@@ -619,6 +620,13 @@ pub fn process_claim(env: &Env, claim_id: u64) -> Result<(), Error> {
 
     payout(env, &claim)?;
     let now = env.ledger().sequence();
+    crate::rolling_claim_cap::record_claim_paid(
+        env,
+        &claim.claimant,
+        claim.policy_id,
+        claim.amount,
+        now,
+    );
     claim.status = ClaimStatus::Paid;
     push_status_transition(&mut claim.status_history, ClaimStatus::Paid, now);
     storage::set_open_claim(env, &claim.claimant, claim.policy_id, false);

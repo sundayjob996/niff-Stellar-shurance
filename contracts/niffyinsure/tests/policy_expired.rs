@@ -136,7 +136,12 @@ fn renew_when_expired_records_notice_once() {
     let end = 400u32;
     client.test_seed_policy(&holder, &1u32, &1_000_000i128, &end);
     token::StellarAssetClient::new(&env, &token).mint(&holder, &100_000_000i128);
-    token::Client::new(&env, &token).approve(&holder, &client.address, &100_000_000i128, &(end + DEFAULT_GRACE_PERIOD_LEDGERS + 1000));
+    token::Client::new(&env, &token).approve(
+        &holder,
+        &client.address,
+        &100_000_000i128,
+        &(end + DEFAULT_GRACE_PERIOD_LEDGERS + 1000),
+    );
 
     // Advance past grace period so renew_policy returns Lapsed
     let lapsed = end.saturating_add(DEFAULT_GRACE_PERIOD_LEDGERS);

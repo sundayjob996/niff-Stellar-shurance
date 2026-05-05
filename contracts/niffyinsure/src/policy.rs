@@ -539,8 +539,9 @@ pub fn renew_policy(
 
     let mut policy = storage::get_policy(env, &holder, policy_id).ok_or(PolicyError::NotFound)?;
     let now = env.ledger().sequence();
+    let grace = storage::get_grace_period_ledgers(env);
 
-    if ledger::is_expired(now, policy.end_ledger) {
+    if ledger::is_expired(now, policy.end_ledger.saturating_add(grace)) {
         publish_policy_expired_if_due(env, &policy, now);
         return Ok(crate::types::RenewPolicyOutcome::Lapsed);
     }
@@ -557,7 +558,12 @@ pub fn renew_policy(
         return Err(PolicyError::TooManyStrikesForRenewal);
     }
 
-    if !ledger::is_in_renewal_window(now, policy.end_ledger, ledger::RENEWAL_WINDOW_LEDGERS) {
+    if !ledger::is_in_renewal_window_with_grace(
+        now,
+        policy.end_ledger,
+        ledger::RENEWAL_WINDOW_LEDGERS,
+        grace,
+    ) {
         return Err(PolicyError::NotInRenewalWindow);
     }
 

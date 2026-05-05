@@ -7,8 +7,8 @@ mod claim;
 pub mod events;
 mod governance_token;
 mod ledger;
-mod policy;
-mod policy_lifecycle;
+pub mod policy;
+pub mod policy_lifecycle;
 pub mod premium;
 pub mod premium_pure;
 mod rolling_claim_cap;
@@ -571,7 +571,18 @@ impl NiffyInsure {
         holder: Address,
         policy_id: u32,
     ) -> Result<(), policy::PolicyError> {
-        policy::process_expired(&env, holder, policy_id)
+        // Record expiry event when now >= end_ledger (even during grace period).
+        // Deactivate when now >= end + grace (after grace period ends).
+        let result = policy::process_expired(&env, holder.clone(), policy_id);
+        // Also attempt lifecycle deactivation; ignore NotYetExpired (still in grace).
+        let _ = policy_lifecycle::process_expired(&env, holder, policy_id).map_err(|e| match e {
+            policy_lifecycle::PolicyError::PolicyNotFound => policy::PolicyError::NotFound,
+            policy_lifecycle::PolicyError::PolicyLapseNotReached => {
+                policy::PolicyError::NotYetExpired
+            }
+            _ => policy::PolicyError::NotYetExpired,
+        });
+        result
     }
 
     /// Renew before `end_ledger` (renewal window). If already expired, emits [`policy::PolicyExpired`]

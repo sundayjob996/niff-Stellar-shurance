@@ -20,7 +20,7 @@ use niffyinsure::{
 };
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
-    Address, Env, String,
+    token, Address, Env, String,
 };
 
 fn setup() -> (Env, NiffyInsureClient<'static>, Address, Address) {
@@ -30,12 +30,30 @@ fn setup() -> (Env, NiffyInsureClient<'static>, Address, Address) {
     let cid = env.register(niffyinsure::NiffyInsure, ());
     let client = NiffyInsureClient::new(&env, &cid);
     let admin = Address::generate(&env);
-    let token = Address::generate(&env);
+    let issuer = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(issuer).address();
     client.initialize(&admin, &token);
     (env, client, admin, token)
 }
 
-fn initiate(client: &NiffyInsureClient, holder: &Address, token: &Address, nonce: Option<u64>) {
+fn fund(env: &Env, token: &Address, holder: &Address) {
+    token::StellarAssetClient::new(env, token).mint(holder, &100_000_000i128);
+}
+
+fn initiate(
+    env: &Env,
+    client: &NiffyInsureClient,
+    holder: &Address,
+    token: &Address,
+    nonce: Option<u64>,
+) {
+    fund(env, token, holder);
+    token::Client::new(env, token).approve(
+        holder,
+        &client.address,
+        &100_000_000i128,
+        &(env.ledger().sequence() + 10_000),
+    );
     client.initiate_policy(
         holder,
         &PolicyType::Auto,
@@ -81,7 +99,7 @@ fn none_nonce_skips_check_and_increments() {
     let (env, client, _, token) = setup();
     let holder = Address::generate(&env);
     // No nonce supplied — should always succeed and still increment
-    initiate(&client, &holder, &token, None);
+    initiate(&env, &client, &holder, &token, None);
     // Nonce increments even when None is passed
     assert_eq!(client.get_nonce(&holder), 1u64);
 }
@@ -94,10 +112,17 @@ fn correct_nonce_passes_and_increments() {
     let holder = Address::generate(&env);
 
     assert_eq!(client.get_nonce(&holder), 0u64);
-    initiate(&client, &holder, &token, Some(0));
+    initiate(&env, &client, &holder, &token, Some(0));
     assert_eq!(client.get_nonce(&holder), 1u64);
 
     // Second policy: nonce is now 1
+    fund(&env, &token, &holder);
+    token::Client::new(&env, &token).approve(
+        &holder,
+        &client.address,
+        &100_000_000i128,
+        &(env.ledger().sequence() + 10_000),
+    );
     let result = client.try_initiate_policy(
         &holder,
         &PolicyType::Auto,
@@ -155,7 +180,7 @@ fn gap_nonce_reverts() {
     let (env, client, _, token) = setup();
     let holder = Address::generate(&env);
 
-    initiate(&client, &holder, &token, Some(0)); // nonce → 1
+    initiate(&env, &client, &holder, &token, Some(0)); // nonce → 1
     assert_eq!(client.get_nonce(&holder), 1u64);
 
     // Skip nonce 1, try nonce 2 — should revert
@@ -190,12 +215,12 @@ fn nonce_is_independent_per_holder() {
     let h1 = Address::generate(&env);
     let h2 = Address::generate(&env);
 
-    initiate(&client, &h1, &token, Some(0)); // h1 nonce → 1
-    initiate(&client, &h1, &token, Some(1)); // h1 nonce → 2
+    initiate(&env, &client, &h1, &token, Some(0)); // h1 nonce → 1
+    initiate(&env, &client, &h1, &token, Some(1)); // h1 nonce → 2
 
     // h2 nonce is still 0
     assert_eq!(client.get_nonce(&h2), 0u64);
-    initiate(&client, &h2, &token, Some(0)); // h2 nonce → 1
+    initiate(&env, &client, &h2, &token, Some(0)); // h2 nonce → 1
     assert_eq!(client.get_nonce(&h1), 2u64);
     assert_eq!(client.get_nonce(&h2), 1u64);
 }
@@ -251,8 +276,8 @@ fn file_claim_wrong_nonce_does_not_mutate_nonzero_nonce() {
     let voter = Address::generate(&env);
 
     // Advance nonce to 2 via two successful initiate_policy calls.
-    initiate(&client, &holder, &token, Some(0)); // nonce → 1
-    initiate(&client, &holder, &token, Some(1)); // nonce → 2
+    initiate(&env, &client, &holder, &token, Some(0)); // nonce → 1
+    initiate(&env, &client, &holder, &token, Some(1)); // nonce → 2
     assert_eq!(client.get_nonce(&holder), 2u64);
 
     client.test_seed_policy(&holder, &3u32, &1_000_000i128, &200u32);
@@ -282,21 +307,21 @@ fn nonce_shared_across_initiate_and_file_claim() {
     let voter = Address::generate(&env);
 
     // nonce 0 → initiate_policy
-    initiate(&client, &holder, &token, Some(0)); // nonce → 1
+    initiate(&env, &client, &holder, &token, Some(0)); // nonce → 1
     assert_eq!(client.get_nonce(&holder), 1u64);
 
     // Seed a second policy directly so we can file a claim without a second initiate.
-    client.test_seed_policy(&holder, &2u32, &1_000_000i128, &200u32);
+    client.test_seed_policy(&holder, &99u32, &1_000_000i128, &200u32);
     client.test_seed_policy(&voter, &1u32, &1_000_000i128, &200u32);
 
     // nonce 1 → file_claim (continues the same sequence)
     let details = String::from_str(&env, "interleaved nonce test");
     let ev = common::empty_evidence(&env);
-    let claim_id = client.file_claim(&holder, &2u32, &100_000i128, &details, &ev, &Some(1u64));
+    let claim_id = client.file_claim(&holder, &99u32, &100_000i128, &details, &ev, &Some(1u64));
     assert_eq!(claim_id, 1u64);
     assert_eq!(client.get_nonce(&holder), 2u64);
 
     // nonce 2 → another initiate_policy
-    initiate(&client, &holder, &token, Some(2)); // nonce → 3
+    initiate(&env, &client, &holder, &token, Some(2)); // nonce → 3
     assert_eq!(client.get_nonce(&holder), 3u64);
 }
