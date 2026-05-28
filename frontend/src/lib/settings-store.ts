@@ -26,6 +26,7 @@ export interface AppSettings {
   notifications: {
     renewalRemindersEnabled: boolean
     claimUpdatesEnabled: boolean
+    voteRemindersEnabled: boolean
   }
 }
 
@@ -51,6 +52,7 @@ const DEFAULTS: AppSettings = {
   notifications: {
     renewalRemindersEnabled: true,
     claimUpdatesEnabled: true,
+    voteRemindersEnabled: true,
   },
 }
 
