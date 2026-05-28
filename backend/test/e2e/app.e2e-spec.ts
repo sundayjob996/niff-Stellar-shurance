@@ -296,6 +296,76 @@ describe('NiffyInsure API (E2E)', () => {
     });
   });
 
+  // ── Admin Policies Export ──────────────────────────────────────────────────
+
+  describe('GET /api/admin/policies/export (admin-only)', () => {
+    it('returns 401 without valid JWT', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/policies/export');
+
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 403 with user JWT (not admin)', async () => {
+      const token = mintUserToken(FAKE_PUBKEY);
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/policies/export')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(403);
+    });
+
+    it('returns CSV response with correct headers', async () => {
+      const adminToken = mintAdminToken(FAKE_PUBKEY);
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/policies/export')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/csv');
+      expect(res.headers['content-disposition']).toContain('attachment');
+      expect(res.headers['content-disposition']).toContain('policies.csv');
+    });
+
+    it('includes CSV headers in response', async () => {
+      const adminToken = mintAdminToken(FAKE_PUBKEY);
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/policies/export')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      const lines = res.text.split('\n');
+      expect(lines[0]).toContain('id');
+      expect(lines[0]).toContain('holderAddress');
+      expect(lines[0]).toContain('status');
+    });
+
+    it('supports filtering by status', async () => {
+      const adminToken = mintAdminToken(FAKE_PUBKEY);
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/policies/export')
+        .query({ status: 'ACTIVE' })
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/csv');
+    });
+
+    it('supports filtering by date range', async () => {
+      const adminToken = mintAdminToken(FAKE_PUBKEY);
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/policies/export')
+        .query({
+          dateFrom: '2026-01-01T00:00:00Z',
+          dateTo: '2026-12-31T23:59:59Z',
+        })
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/csv');
+    });
+  });
+
   describe('POST /api/claims (with Idempotency-Key)', () => {
     const idempotencyKey = 'f47ac10b-58cc-4372-a567-0e02b2c3d479';
 

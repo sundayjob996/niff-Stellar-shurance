@@ -450,4 +450,47 @@ export class AdminController {
       limit: limit ? parseInt(limit, 10) : undefined,
     });
   }
+
+  /**
+   * GET /admin/policies/export
+   *
+   * Stream policies as CSV with optional filtering.
+   * Supports: status, holderAddress, policyType, dateFrom, dateTo
+   * Returns streaming CSV response.
+   */
+  @Get('policies/export')
+  @ApiOperation({ summary: 'Export policies as CSV with filters' })
+  async exportPolicies(
+    @Req() req: AdminRequest,
+    @Res() res: Response,
+    @Query('status') status?: string,
+    @Query('holderAddress') holderAddress?: string,
+    @Query('policyType') policyType?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    const actor = req.user?.walletAddress ?? 'unknown';
+
+    // Write audit log entry
+    await this.auditService.write({
+      actor,
+      action: 'policies_exported',
+      payload: { status, holderAddress, policyType, dateFrom, dateTo },
+      ipAddress: req.ip,
+    });
+
+    // Generate CSV
+    const csv = await this.adminService.exportPoliciesCSV({
+      status,
+      holderAddress,
+      policyType,
+      dateFrom,
+      dateTo,
+    });
+
+    // Stream response
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="policies.csv"');
+    res.send(csv);
+  }
 }

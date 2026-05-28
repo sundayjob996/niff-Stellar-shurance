@@ -222,4 +222,88 @@ export class AdminService {
   async getFeatureFlags() {
     return this.prisma.featureFlag.findMany({ orderBy: { key: 'asc' } });
   }
+
+  async exportPoliciesCSV(options: {
+    status?: string;
+    holderAddress?: string;
+    policyType?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    pageSize?: number;
+  }) {
+    const DEFAULT_PAGE_SIZE = 100;
+    const pageSize = Math.min(options.pageSize ?? DEFAULT_PAGE_SIZE, 1000);
+
+    // Build where conditions
+    const where: Prisma.PolicyWhereInput = {
+      deletedAt: null, // Exclude soft-deleted
+    };
+
+    // Status filter maps to isActive (active=true, inactive=false)
+    if (options.status) {
+      where.isActive = options.status.toLowerCase() === 'active';
+    }
+
+    if (options.holderAddress) {
+      where.holderAddress = options.holderAddress;
+    }
+
+    if (options.policyType) {
+      where.policyType = options.policyType;
+    }
+
+    const dateConditions: Prisma.DateTimeFilter = {};
+    if (options.dateFrom) {
+      (dateConditions as any).gte = new Date(options.dateFrom);
+    }
+    if (options.dateTo) {
+      (dateConditions as any).lte = new Date(options.dateTo);
+    }
+    if (Object.keys(dateConditions).length > 0) {
+      where.createdAt = dateConditions;
+    }
+
+    // CSV headers
+    const headers = ['id', 'holderAddress', 'policyType', 'isActive', 'createdAt', 'updatedAt'];
+    const rows: string[] = [headers.map(h => `"${h}"`).join(',')];
+
+    // Stream rows using cursor pagination
+    let cursor: string | undefined;
+    let hasMore = true;
+
+    while (hasMore) {
+      const policies = await this.prisma.policy.findMany({
+        where,
+        orderBy: { id: 'asc' },
+        take: pageSize + 1,
+        skip: cursor ? 1 : 0,
+        cursor: cursor ? { id: cursor } : undefined,
+      });
+
+      if (policies.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      hasMore = policies.length > pageSize;
+      const batch = policies.slice(0, pageSize);
+
+      for (const policy of batch) {
+        rows.push([
+          `"${policy.id}"`,
+          `"${policy.holderAddress}"`,
+          `"${policy.policyType}"`,
+          `"${policy.isActive}"`,
+          `"${policy.createdAt.toISOString()}"`,
+          `"${policy.updatedAt.toISOString()}"`,
+        ].join(','));
+      }
+
+      if (hasMore) {
+        cursor = batch[batch.length - 1].id;
+      }
+    }
+
+    return rows.join('\n');
+  }
 }
