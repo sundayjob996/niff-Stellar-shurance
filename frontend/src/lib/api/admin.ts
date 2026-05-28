@@ -45,6 +45,34 @@ export interface QueueStatus {
   failed: number
 }
 
+export type AdminClaimStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'PAID'
+
+export interface AdminClaim {
+  id: number
+  policyId: string
+  creatorAddress: string
+  status: AdminClaimStatus
+  amount: string
+  description?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AdminClaimsPage {
+  items: AdminClaim[]
+  total: number
+  nextCursor?: string
+}
+
+export interface BulkUpdateDryRunResult {
+  affectedClaims: AdminClaim[]
+  totalAffected: number
+}
+
+export interface BulkUpdateResult {
+  updated: number
+}
+
 // ── API calls ──────────────────────────────────────────────────────────────
 
 export const adminApi = {
@@ -86,5 +114,28 @@ export const adminApi = {
       method: 'POST',
       headers: authHeaders(jwt),
       body: JSON.stringify({ fromLedger, network }),
+    }),
+
+  getClaims: (jwt: string, params: { cursor?: string; limit?: number; search?: string; status?: AdminClaimStatus }) => {
+    const q = new URLSearchParams()
+    if (params.cursor) q.set('cursor', params.cursor)
+    if (params.limit) q.set('limit', String(params.limit))
+    if (params.search) q.set('search', params.search)
+    if (params.status) q.set('status', params.status)
+    return apiFetch<AdminClaimsPage>(`${base()}/claims?${q}`, { headers: authHeaders(jwt) })
+  },
+
+  overrideClaimStatus: (jwt: string, claimId: number, status: AdminClaimStatus, reason: string) =>
+    apiFetch<AdminClaim>(`${base()}/claims/${claimId}/override`, {
+      method: 'POST',
+      headers: authHeaders(jwt),
+      body: JSON.stringify({ status, reason }),
+    }),
+
+  bulkUpdateClaims: (jwt: string, claimIds: number[], status: AdminClaimStatus, dryRun: boolean) =>
+    apiFetch<BulkUpdateDryRunResult | BulkUpdateResult>(`${base()}/claims/bulk-update`, {
+      method: 'POST',
+      headers: authHeaders(jwt),
+      body: JSON.stringify({ claimIds, status, dryRun }),
     }),
 }
