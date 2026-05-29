@@ -596,44 +596,22 @@ pub fn set_max_evidence_count(env: &Env, new_count: u32) -> Result<(), AdminErro
     Ok(())
 }
 
-#[contractevent(topics = ["niffyinsure", "policy_type_config_updated"])]
+#[contractevent(topics = ["niffyinsure", "gateway_allowlist_updated"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PolicyTypeConfigUpdated {
-    pub policy_type: crate::types::PolicyType,
-    pub payout_asset_override: Option<Address>,
+pub struct GatewayAllowlistUpdated {
+    pub gateway_count: u32,
 }
 
-/// Admin-only: set (or clear) the payout asset override for a policy type.
+/// Admin-only: update the allowlisted IPFS gateway URL prefixes for evidence validation.
 ///
-/// When `payout_asset_override` is `Some(asset)`, approved claims for policies of
-/// `policy_type` will be paid out in `asset` instead of the policy's premium asset.
-/// The override asset must be allowlisted at the time this function is called.
-///
-/// Pass `None` to remove the override and revert to premium-asset payouts.
-pub fn set_policy_type_config(
-    env: &Env,
-    policy_type: crate::types::PolicyType,
-    payout_asset_override: Option<Address>,
-) -> Result<(), AdminError> {
+/// Evidence URLs must start with `ipfs://` or one of the allowlisted gateway prefixes.
+/// Pass an empty vector to disable gateway validation (only `ipfs://` allowed).
+pub fn set_gateway_allowlist(env: &Env, gateways: Vec<String>) -> Result<(), AdminError> {
     let _admin = require_admin(env);
-
-    // Validate: override asset must be allowlisted when set.
-    if let Some(ref asset) = payout_asset_override {
-        if !storage::is_allowed_asset(env, asset) {
-            return Err(AdminError::PayoutAssetOverrideNotAllowlisted);
-        }
-    }
-
-    let config = crate::types::PolicyTypeConfig {
-        payout_asset_override: payout_asset_override.clone(),
-    };
-    storage::set_policy_type_config(env, &policy_type, &config);
-
-    PolicyTypeConfigUpdated {
-        policy_type,
-        payout_asset_override,
+    storage::set_gateway_allowlist(env, &gateways);
+    GatewayAllowlistUpdated {
+        gateway_count: gateways.len(),
     }
     .publish(env);
-
     Ok(())
 }
