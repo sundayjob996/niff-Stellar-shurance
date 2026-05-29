@@ -9,8 +9,9 @@ import { ConfigService } from "@nestjs/config";
 import CircuitBreaker from "opossum";
 import { getNetworkConfig } from "../config/network.config";
 import { filterHorizonOperations } from "./filters/horizon-field.filter";
-import { HorizonTransactionResponse } from "./dto/horizon-transaction.dto";
+import { HorizonTransactionResponse, DecodedEvent } from "./dto/horizon-transaction.dto";
 import { RedisService } from "../cache/redis.service";
+import { PrismaService } from "../prisma/prisma.service";
 
 const CACHE_TTL_SECONDS = 15;
 const CACHE_PREFIX = "horizon:txcache:";
@@ -38,6 +39,7 @@ export class HorizonService {
   constructor(
     private readonly config: ConfigService,
     private readonly redis: RedisService,
+    private readonly prisma: PrismaService,
   ) {
     const networkConfig = getNetworkConfig();
     this.horizonUrl = networkConfig.horizonUrl;
@@ -133,8 +135,49 @@ export class HorizonService {
     const filtered = filterHorizonOperations(records);
     const nextCursor = this.extractNextCursor(raw);
 
+    // Enrich with contract events from raw_events
+    let eventsEnriched = true;
+    try {
+      const txHashes = filtered
+        .map((r) => r.transaction_hash)
+        .filter(Boolean);
+
+      if (txHashes.length > 0) {
+        const events = await this.prisma.rawEvent.findMany({
+          where: { txHash: { in: txHashes } },
+          orderBy: [{ txHash: 'asc' }, { eventIndex: 'asc' }],
+        });
+
+        const byHash = new Map<string, DecodedEvent[]>();
+        for (const e of events) {
+          const decoded: DecodedEvent = {
+            eventIndex: e.eventIndex,
+            contractId: e.contractId,
+            ledger: e.ledger,
+            ledgerClosedAt: e.ledgerClosedAt.toISOString(),
+            topic1: e.topic1 ?? undefined,
+            topic2: e.topic2 ?? undefined,
+            topic3: e.topic3 ?? undefined,
+            topic4: e.topic4 ?? undefined,
+            data: e.data,
+          };
+          const arr = byHash.get(e.txHash) ?? [];
+          arr.push(decoded);
+          byHash.set(e.txHash, arr);
+        }
+
+        for (const record of filtered) {
+          record.contractEvents = byHash.get(record.transaction_hash) ?? [];
+        }
+      }
+    } catch (err) {
+      this.logger.warn(`Event enrichment failed: ${err}`);
+      eventsEnriched = false;
+    }
+
     const response: HorizonTransactionResponse = {
       records: filtered,
+      eventsEnriched,
       ...(nextCursor ? { next_cursor: nextCursor } : {}),
     };
 

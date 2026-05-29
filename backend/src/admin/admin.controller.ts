@@ -31,6 +31,7 @@ import { BackfillDto } from './dto/backfill.dto';
 import { AuditQueryDto } from './dto/audit-query.dto';
 import { FeatureFlagDto } from './dto/feature-flag.dto';
 import { SetRateLimitDto, EnableOverrideDto } from './dto/rate-limit.dto';
+import { BulkUpdateClaimsDto, BULK_UPDATE_MAX_BATCH } from './dto/bulk-update-claims.dto';
 import { PrivacyService, PrivacyRequestType } from '../maintenance/privacy.service';
 import { RateLimitService } from '../rate-limit/rate-limit.service';
 import { QueueMonitorService } from '../queues/queue-monitor.service';
