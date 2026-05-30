@@ -71,6 +71,10 @@ pub enum Error {
     RollingClaimCapExceeded = 54,
     /// Keeper `process_payout_timeout` called before the approved payout deadline elapsed.
     PayoutDeadlineNotReached = 55,
+    /// Caller attempted to vote directly while an active delegation is in force.
+    VoteDelegated = 56,
+    /// Delegation would create a cycle in the vote-delegation graph.
+    CircularDelegation = 57,
 }
 
 pub fn validate_quorum_bps(bps: u32) -> Result<(), Error> {

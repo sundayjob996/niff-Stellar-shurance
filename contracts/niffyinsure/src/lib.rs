@@ -205,6 +205,8 @@ impl NiffyInsure {
             53 => validate::Error::ClaimNotProcessing,
             54 => validate::Error::RollingClaimCapExceeded,
             55 => validate::Error::PayoutDeadlineNotReached,
+            56 => validate::Error::VoteDelegated,
+            57 => validate::Error::CircularDelegation,
             _ => validate::Error::ClaimNotApproved,
         };
         policy::map_quote_error(&env, err)
@@ -315,6 +317,45 @@ impl NiffyInsure {
     ) -> Result<types::ClaimStatus, validate::Error> {
         voter.require_auth();
         claim::vote_on_claim(&env, &voter, claim_id, &vote)
+    }
+
+    /// Holder-authenticated delegation of vote weight to another address.
+    ///
+    /// Delegations are checked against the current ledger and expire at
+    /// `expiry_ledger` inclusively.
+    pub fn delegate_vote(
+        env: Env,
+        delegator: Address,
+        delegate: Address,
+        expiry_ledger: u32,
+    ) -> Result<(), validate::Error> {
+        delegator.require_auth();
+        storage::bump_instance(&env);
+
+        if delegator == delegate {
+            return Err(validate::Error::CircularDelegation);
+        }
+
+        let now = env.ledger().sequence();
+        let resolved_target = storage::resolve_vote_delegation_target(&env, &delegate, now)?;
+        if resolved_target == delegator {
+            return Err(validate::Error::CircularDelegation);
+        }
+
+        storage::set_vote_delegation(
+            &env,
+            &delegator,
+            &types::VoteDelegation {
+                delegate,
+                expiry_ledger,
+            },
+        );
+        Ok(())
+    }
+
+    /// Read-only: current delegation binding for a holder, if any.
+    pub fn get_vote_delegation(env: Env, delegator: Address) -> Option<types::VoteDelegation> {
+        storage::get_vote_delegation(&env, &delegator)
     }
 
     /// Permissionless keeper hook: bump persistent TTL for the claim voter snapshot.

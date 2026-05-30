@@ -250,6 +250,8 @@ pub fn map_quote_error(env: &Env, err: Error) -> QuoteFailure {
         Error::PayoutDeadlineNotReached => {
             "payout timeout is not yet due: the approved claim must wait for its deadline to pass"
         },
+        Error::VoteDelegated => "direct vote rejected because the caller has an active delegation",
+        Error::CircularDelegation => "delegation would create a cycle",
     };
     QuoteFailure {
         code: err as u32,

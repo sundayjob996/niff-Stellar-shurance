@@ -240,6 +240,14 @@ pub enum VoteOption {
     Reject,
 }
 
+/// Active vote delegation binding for a holder.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VoteDelegation {
+    pub delegate: Address,
+    pub expiry_ledger: u32,
+}
+
 /// Reason for policy termination.
 ///
 /// GOVERNANCE NOTE: `ExcessiveRejections` is set by the claims engine
