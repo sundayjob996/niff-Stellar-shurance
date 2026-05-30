@@ -79,6 +79,8 @@ pub enum Error {
     ProtocolFeeOutOfBounds = 58,
     /// Minimum solvency ratio basis points outside documented bounds.
     SolvencyRatioOutOfBounds = 59,
+    /// Batch get exceeded CLAIM_BATCH_GET_MAX.
+    ClaimBatchTooLarge = 60,
 }
 
 pub fn validate_quorum_bps(bps: u32) -> Result<(), Error> {

@@ -314,6 +314,12 @@ pub const PAGE_SIZE_MAX: u32 = 20;
 /// `limit`), an over-cap batch **reverts** so callers chunk explicitly.
 pub const POLICY_BATCH_GET_MAX: u32 = PAGE_SIZE_MAX;
 
+/// Maximum claim IDs in a single `get_claims_batch` call.
+///
+/// This intentionally matches [`PAGE_SIZE_MAX`] so dashboard simulations can
+/// bulk-load claims without unbounded metered storage reads.
+pub const CLAIM_BATCH_GET_MAX: u32 = PAGE_SIZE_MAX;
+
 /// Key for batched policy reads (`get_policies_batch`).
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

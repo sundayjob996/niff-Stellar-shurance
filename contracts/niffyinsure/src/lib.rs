@@ -250,6 +250,7 @@ impl NiffyInsure {
             57 => validate::Error::CircularDelegation,
             58 => validate::Error::ProtocolFeeOutOfBounds,
             59 => validate::Error::SolvencyRatioOutOfBounds,
+            60 => validate::Error::ClaimBatchTooLarge,
             _ => validate::Error::ClaimNotApproved,
         };
         policy::map_quote_error(&env, err)
@@ -539,6 +540,21 @@ impl NiffyInsure {
 
     pub fn get_claim(env: Env, claim_id: u64) -> Result<types::Claim, validate::Error> {
         claim::get_claim(&env, claim_id)
+    }
+
+    /// Batch-read claims in one simulation/RPC round-trip.
+    ///
+    /// Returns positions aligned with `ids`, using `None` for missing claim IDs.
+    /// More than `CLAIM_BATCH_GET_MAX` IDs reverts before any storage reads.
+    pub fn get_claims_batch(env: Env, ids: Vec<u64>) -> Vec<Option<types::Claim>> {
+        if ids.len() > types::CLAIM_BATCH_GET_MAX {
+            panic_with_error!(&env, validate::Error::ClaimBatchTooLarge);
+        }
+        let mut out: Vec<Option<types::Claim>> = Vec::new(&env);
+        for id in ids.iter() {
+            out.push_back(storage::get_claim(&env, id));
+        }
+        out
     }
 
     pub fn get_claim_counter(env: Env) -> u64 {

@@ -271,6 +271,7 @@ pub fn map_quote_error(env: &Env, err: Error) -> QuoteFailure {
         Error::SolvencyRatioOutOfBounds => {
             "minimum solvency ratio basis points outside documented bounds"
         },
+        Error::ClaimBatchTooLarge => "claim batch exceeds maximum allowed IDs per call",
     };
     QuoteFailure {
         code: err as u32,
