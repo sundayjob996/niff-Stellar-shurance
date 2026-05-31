@@ -4,6 +4,19 @@ import { getConfig } from '@/config/env'
 export interface NotificationPreferences {
   renewalRemindersEnabled: boolean
   claimUpdatesEnabled: boolean
+  voteRemindersEnabled: boolean
+}
+
+export async function getNotificationPreferences(
+  walletAddress: string,
+  jwt: string,
+): Promise<NotificationPreferences> {
+  const { apiUrl } = getConfig()
+  return apiFetch<NotificationPreferences>(`${apiUrl}/notifications/preferences/${walletAddress}`, {
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+    },
+  })
 }
 
 export async function patchNotificationPreferences(

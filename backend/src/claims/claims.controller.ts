@@ -12,13 +12,20 @@ import {
   Body,
   Res,
   BadRequestException,
+  NotFoundException,
+  ForbiddenException,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
   ApiQuery,
+  ApiConsumes,
+  ApiBody,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
@@ -26,9 +33,13 @@ import { ClaimsService } from './claims.service';
 import { ClaimsListResponseDto, ClaimDetailResponseDto } from './dto/claim.dto';
 import { BuildClaimTransactionDto } from './dto/build-claim-transaction.dto';
 import { SubmitTransactionDto } from './dto/submit-transaction.dto';
+import { EvidenceUploadService } from './services/evidence-upload.service';
+import { EvidenceProxyService } from './services/evidence-proxy.service';
+import { EVIDENCE_MAX_BYTES_DEFAULT } from './dto/evidence-upload.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { WalletAddress } from '../auth/decorators/wallet-address.decorator';
 import { RateLimitGuard } from '../rate-limit/rate-limit.guard';
+import { ClaimRateLimitGuard } from '../rate-limit/claim-rate-limit.guard';
 import { MAX_LIMIT, DEFAULT_LIMIT } from '../helpers/pagination';
 import { OptionalJwtAuthGuard } from '../tx/guards/optional-jwt.guard';
 
@@ -38,7 +49,46 @@ const MAX_WATCH_IDS = 50;
 @ApiTags('claims')
 @Controller('claims')
 export class ClaimsController {
-  constructor(private readonly claimsService: ClaimsService) {}
+  constructor(
+    private readonly claimsService: ClaimsService,
+    private readonly evidenceUploadService: EvidenceUploadService,
+    private readonly evidenceProxyService: EvidenceProxyService,
+  ) {}
+
+  @Post('evidence/upload')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: undefined, // memory storage (default)
+      limits: { fileSize: EVIDENCE_MAX_BYTES_DEFAULT, files: 1 },
+    }),
+  )
+  @ApiBearerAuth()
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload claim evidence file to IPFS' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary', description: 'Evidence file (PDF, PNG, JPEG)' },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Upload successful', schema: { type: 'object', properties: { cid: { type: 'string' }, gatewayUrl: { type: 'string' } } } })
+  @ApiResponse({ status: 400, description: 'Invalid file (unsupported type, oversized, or malformed)' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
+  async uploadEvidence(
+    @UploadedFile() file: Express.Multer.File,
+    @WalletAddress() walletAddress: string,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No file provided');
+    }
+    return this.evidenceUploadService.upload(file, walletAddress);
+  }
 
   @Get()
   @ApiOperation({ summary: 'List claims with cursor-based pagination' })
@@ -109,6 +159,22 @@ export class ClaimsController {
     return this.claimsService.getClaimById(id, walletAddress);
   }
 
+  @Get(':id/evidence/:index')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Download claim evidence file via authenticated IPFS proxy' })
+  @ApiResponse({ status: 200, description: 'Evidence file stream' })
+  @ApiResponse({ status: 403, description: 'Forbidden — not the claimant, a voter, or an admin' })
+  @ApiResponse({ status: 404, description: 'Claim or evidence index not found' })
+  async downloadEvidence(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('index', ParseIntPipe) index: number,
+    @WalletAddress() walletAddress: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    await this.evidenceProxyService.stream(id, index, walletAddress, res);
+  }
+
   @Post('build-transaction')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -125,7 +191,7 @@ export class ClaimsController {
   }
 
   @Post('submit')
-  @UseGuards(RateLimitGuard)
+  @UseGuards(ClaimRateLimitGuard, RateLimitGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Submit signed claim transaction' })
   @ApiResponse({ status: 200, description: 'Transaction submitted' })

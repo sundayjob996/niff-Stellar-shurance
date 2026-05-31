@@ -154,6 +154,13 @@ export function SettingsPanel() {
             checked={settings.notifications.claimUpdatesEnabled}
             onChange={(v) => handleNotificationToggle('claimUpdatesEnabled', v)}
           />
+          <NotificationToggle
+            id="vote-reminders"
+            label="Vote reminders"
+            description="Get notified about active governance votes you haven't cast yet."
+            checked={settings.notifications.voteRemindersEnabled}
+            onChange={(v) => handleNotificationToggle('voteRemindersEnabled', v)}
+          />
           {syncing && (
             <p className="text-xs text-muted-foreground" aria-live="polite">Syncing preferences…</p>
           )}

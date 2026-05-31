@@ -1,5 +1,6 @@
 import bundleAnalyzer from '@next/bundle-analyzer'
 import createNextIntlPlugin from 'next-intl/plugin'
+import withPWAInit from '@ducanh2912/next-pwa'
 import { z } from 'zod'
 
 // ---------------------------------------------------------------------------
@@ -37,6 +38,36 @@ if (!buildEnvResult.success) {
 const withNextIntl = createNextIntlPlugin('./src/i18n/request.ts')
 const withBundleAnalyzer = bundleAnalyzer({
   enabled: process.env.ANALYZE === 'true',
+})
+
+// ---------------------------------------------------------------------------
+// PWA / Service Worker
+// Disabled in development to avoid caching issues during local dev.
+// ---------------------------------------------------------------------------
+const withPWA = withPWAInit({
+  dest: 'public',
+  disable: process.env.NODE_ENV === 'development',
+  // Cache the app shell (HTML, CSS, JS) for offline access
+  cacheOnFrontEndNav: true,
+  aggressiveFrontEndNavCaching: true,
+  reloadOnOnline: true,
+  workboxOptions: {
+    disableDevLogs: true,
+    // Precache the app shell routes
+    runtimeCaching: [
+      {
+        // Cache page navigations (HTML) with NetworkFirst
+        urlPattern: /^https?.*$/,
+        handler: 'NetworkFirst',
+        options: {
+          cacheName: 'offlineCache',
+          expiration: {
+            maxEntries: 200,
+          },
+        },
+      },
+    ],
+  },
 })
 
 // ---------------------------------------------------------------------------
@@ -175,6 +206,9 @@ function buildCsp(nonce) {
       .filter(Boolean)
       .join(' '),
 
+    // Allow service worker registration from same origin
+    `worker-src 'self'`,
+
     // No iframes needed; wallet popups are top-level windows
     `frame-src 'none'`,
 
@@ -241,4 +275,4 @@ const nextConfig = {
   },
 }
 
-export default withBundleAnalyzer(withNextIntl(nextConfig))
+export default withBundleAnalyzer(withNextIntl(withPWA(nextConfig)))

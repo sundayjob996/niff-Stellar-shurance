@@ -12,11 +12,15 @@ import { QueueMonitorService } from '../queues/queue-monitor.service';
 import { AdminRoleGuard } from './guards/admin-role.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SolvencyMonitoringService } from '../maintenance/solvency-monitoring.service';
+import { SorobanService } from '../rpc/soroban.service';
 
 const mockAdminService = {
   enqueueReindex: jest.fn(),
+  enqueueBackfill: jest.fn(),
+  getBackfillJob: jest.fn(),
   setFeatureFlag: jest.fn(),
   getFeatureFlags: jest.fn(),
+  getReindexStatus: jest.fn(),
 };
 const mockAdminPoliciesService = {
   listPolicies: jest.fn(),
@@ -37,9 +41,16 @@ const mockQueueMonitorService = {
   replayJob: jest.fn(),
   getQueues: jest.fn().mockReturnValue([]),
 };
+const mockSorobanService = {
+  tryEmitClaimStatusOverrideEvent: jest.fn(),
+};
 
-const adminReq = (role = 'admin') =>
-  ({ user: { walletAddress: 'GADMIN', role }, ip: '127.0.0.1' } as unknown as Request);
+const adminReq = (role = 'admin', scopes: string[] = ['admin:claims:override']) =>
+  ({
+    user: { walletAddress: 'GADMIN', role, scopes },
+    adminIdentity: { email: 'admin@niffyinsure.test', role, scopes },
+    ip: '127.0.0.1',
+  } as unknown as Request);
 
 const toExecutionContext = (role?: string): ExecutionContext =>
   ({
@@ -60,7 +71,7 @@ describe('AdminController', () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AdminController],
       providers: [
-        { provide: AdminService, useValue: mockAdminService },
+      { provide: AdminService, useValue: mockAdminService },
         { provide: AdminPoliciesService, useValue: mockAdminPoliciesService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: ConfigService, useValue: mockConfigService },
@@ -72,6 +83,7 @@ describe('AdminController', () => {
           provide: SolvencyMonitoringService,
           useValue: mockSolvencyMonitoringService,
         },
+        { provide: SorobanService, useValue: mockSorobanService },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -119,6 +131,120 @@ describe('AdminController', () => {
     });
   });
 
+  // ── GET /admin/reindex/status ────────────────────────────────────────────
+
+  describe('GET /admin/reindex/status', () => {
+    it('returns progress for the default network', async () => {
+      const mockStatus = {
+        jobId: 'reindex-testnet-500-ts',
+        network: 'testnet',
+        currentLedger: 750,
+        targetLedger: 1000,
+        percentage: 50,
+        status: 'running',
+        startedAt: new Date('2026-01-01'),
+      };
+      mockAdminService.getReindexStatus.mockResolvedValue(mockStatus);
+      const result = await controller.getReindexStatus(undefined);
+      expect(result).toEqual(mockStatus);
+      expect(mockAdminService.getReindexStatus).toHaveBeenCalledWith('testnet');
+    });
+
+    it('uses explicit network query param', async () => {
+      mockAdminService.getReindexStatus.mockResolvedValue({
+        jobId: 'j', network: 'mainnet', currentLedger: 100, targetLedger: 200,
+        percentage: 50, status: 'running', startedAt: new Date(),
+      });
+      await controller.getReindexStatus('mainnet');
+      expect(mockAdminService.getReindexStatus).toHaveBeenCalledWith('mainnet');
+    });
+
+    it('throws NotFoundException when no progress row exists', async () => {
+      mockAdminService.getReindexStatus.mockResolvedValue(null);
+      await expect(controller.getReindexStatus(undefined)).rejects.toThrow('No reindex progress');
+    });
+  });
+
+  describe('POST /admin/indexer/backfill', () => {
+    it('enqueues batched jobs and writes audit row', async () => {
+      const mockJobs = [
+        { jobId: 'backfill-testnet-100-149-ts-0', fromLedger: 100, toLedger: 149, batchSize: 50 },
+        { jobId: 'backfill-testnet-150-199-ts-1', fromLedger: 150, toLedger: 199, batchSize: 50 },
+      ];
+      mockAdminService.enqueueBackfill.mockResolvedValue(mockJobs);
+
+      const result = await controller.enqueueBackfill(
+        { fromLedger: 100, toLedger: 199 },
+        adminReq(),
+      );
+
+      expect(result).toMatchObject({
+        fromLedger: 100,
+        toLedger: 199,
+        network: 'testnet',
+        batchSize: 50,
+        status: 'queued',
+        jobs: mockJobs,
+      });
+      expect(mockAdminService.enqueueBackfill).toHaveBeenCalledWith(100, 199, 'testnet', 50);
+      expect(mockAuditService.write).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: 'GADMIN',
+          action: 'indexer_backfill',
+          payload: expect.objectContaining({ fromLedger: 100, toLedger: 199, network: 'testnet' }),
+        }),
+      );
+    });
+
+    it('rejects when fromLedger > toLedger', async () => {
+      await expect(
+        controller.enqueueBackfill({ fromLedger: 200, toLedger: 100 }, adminReq()),
+      ).rejects.toThrow('fromLedger must be <= toLedger');
+      expect(mockAdminService.enqueueBackfill).not.toHaveBeenCalled();
+    });
+
+    it('rejects when range exceeds MAX_BACKFILL_LEDGER_RANGE', async () => {
+      // mockConfigService returns undefined for unknown keys, so maxRange defaults to 100_000
+      // We need a range > 100_000
+      await expect(
+        controller.enqueueBackfill({ fromLedger: 1, toLedger: 200_001 }, adminReq()),
+      ).rejects.toThrow(/exceeds MAX_BACKFILL_LEDGER_RANGE/);
+      expect(mockAdminService.enqueueBackfill).not.toHaveBeenCalled();
+    });
+
+    it('uses explicit network when provided', async () => {
+      mockAdminService.enqueueBackfill.mockResolvedValue([]);
+      await controller.enqueueBackfill(
+        { fromLedger: 100, toLedger: 149, network: 'mainnet' },
+        adminReq(),
+      );
+      expect(mockAdminService.enqueueBackfill).toHaveBeenCalledWith(100, 149, 'mainnet', 50);
+    });
+  });
+
+  // ── GET /admin/indexer/backfill/:jobId ───────────────────────────────────
+
+  describe('GET /admin/indexer/backfill/:jobId', () => {
+    it('returns job status when found', async () => {
+      const mockJob = {
+        jobId: 'backfill-testnet-100-149-ts-0',
+        state: 'completed',
+        data: { fromLedger: 100, toLedger: 149, network: 'testnet', batchSize: 50 },
+        progress: 0,
+      };
+      mockAdminService.getBackfillJob.mockResolvedValue(mockJob);
+
+      const result = await controller.getBackfillJob('backfill-testnet-100-149-ts-0');
+      expect(result).toEqual(mockJob);
+      expect(mockAdminService.getBackfillJob).toHaveBeenCalledWith('backfill-testnet-100-149-ts-0');
+    });
+
+    it('throws NotFoundException when job not found', async () => {
+      mockAdminService.getBackfillJob.mockResolvedValue(null);
+      await expect(controller.getBackfillJob('nonexistent')).rejects.toThrow('not found');
+    });
+  });
+
   // ── GET /admin/policies ──────────────────────────────────────────────────
 
   describe('GET /admin/policies', () => {
@@ -149,6 +275,44 @@ describe('AdminController', () => {
       expect(mockAuditService.write).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'policy_soft_delete' }),
       );
+    });
+  });
+
+  describe('POST /admin/claims/:id/override', () => {
+    it('updates claim status and writes audit before override', async () => {
+      mockAdminService.getClaimForOverride.mockResolvedValue({ id: 7, status: 'PENDING' });
+      mockAdminService.overrideClaimStatus.mockResolvedValue({ id: 7, status: 'APPROVED' });
+      mockSorobanService.tryEmitClaimStatusOverrideEvent.mockResolvedValue(undefined);
+
+      const result = await controller.overrideClaimStatus(
+        '7',
+        { newStatus: 'APPROVED' as never, reason: 'manual review complete' },
+        adminReq(),
+      );
+
+      expect(mockAuditService.write).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'claim_status_override',
+          payload: expect.objectContaining({
+            claimId: 7,
+            oldStatus: 'PENDING',
+            newStatus: 'APPROVED',
+            reason: 'manual review complete',
+          }),
+        }),
+      );
+      expect(mockAdminService.overrideClaimStatus).toHaveBeenCalledWith(7, 'APPROVED');
+      expect(result).toEqual({ claimId: 7, oldStatus: 'PENDING', newStatus: 'APPROVED', status: 'updated' });
+    });
+
+    it('rejects callers without elevated scope', async () => {
+      await expect(
+        controller.overrideClaimStatus(
+          '7',
+          { newStatus: 'APPROVED' as never, reason: 'manual review complete' },
+          adminReq('admin', []),
+        ),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 
@@ -293,7 +457,7 @@ describe('Admin Role Guard Enforcement', () => {
     module = await Test.createTestingModule({
       controllers: [AdminController],
       providers: [
-        { provide: AdminService, useValue: mockAdminService },
+      { provide: AdminService, useValue: mockAdminService },
         { provide: AdminPoliciesService, useValue: mockAdminPoliciesService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: ConfigService, useValue: mockConfigService },

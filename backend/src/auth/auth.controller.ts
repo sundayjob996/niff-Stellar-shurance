@@ -9,8 +9,19 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { IsString } from 'class-validator';
 import { WalletAuthService } from './wallet-auth.service';
 import { ChallengeDto, VerifyDto, NonceQueryDto, VerifyWalletDto } from './dto/challenge.dto';
+
+class RefreshDto {
+  @IsString()
+  refreshToken!: string;
+}
+
+class LogoutDto {
+  @IsString()
+  refreshToken!: string;
+}
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -69,5 +80,33 @@ export class AuthController {
     // Support both { address } (new) and { publicKey } (legacy) field names
     const address = (dto as VerifyWalletDto).address ?? (dto as VerifyDto).publicKey;
     return this.walletAuthService.verifyChallenge(address, dto.nonce, dto.signature);
+  }
+
+  /**
+   * POST /api/auth/refresh
+   * Exchange a valid refresh token for a new access + refresh token pair.
+   * The submitted refresh token is immediately invalidated (rotation).
+   */
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Rotate refresh token and obtain a new access token' })
+  @ApiResponse({ status: 200, description: 'New access + refresh token pair.' })
+  @ApiResponse({ status: 401, description: 'Invalid, expired, or reused refresh token.' })
+  async refresh(@Body() dto: RefreshDto) {
+    return this.walletAuthService.refresh(dto.refreshToken);
+  }
+
+  /**
+   * POST /api/auth/logout
+   * Immediately revoke the active refresh token.
+   */
+  @Post('logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Revoke refresh token (logout)' })
+  @ApiResponse({ status: 204, description: 'Logged out.' })
+  async logout(@Body() dto: LogoutDto) {
+    await this.walletAuthService.logout(dto.refreshToken);
   }
 }

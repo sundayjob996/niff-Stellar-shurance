@@ -45,6 +45,34 @@ export interface QueueStatus {
   failed: number
 }
 
+export type AdminClaimStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'PAID'
+
+export interface AdminClaim {
+  id: number
+  policyId: string
+  creatorAddress: string
+  status: AdminClaimStatus
+  amount: string
+  description?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AdminClaimsPage {
+  items: AdminClaim[]
+  total: number
+  nextCursor?: string
+}
+
+export interface BulkUpdateDryRunResult {
+  affectedClaims: AdminClaim[]
+  totalAffected: number
+}
+
+export interface BulkUpdateResult {
+  updated: number
+}
+
 // ── API calls ──────────────────────────────────────────────────────────────
 
 export const adminApi = {
@@ -65,19 +93,23 @@ export const adminApi = {
       body: JSON.stringify({ enabled }),
     }),
 
-  getAudits: (jwt: string, params: { cursor?: string; limit?: number; action?: string; actor?: string }) => {
+  getAudits: (jwt: string, params: { cursor?: string; limit?: number; action?: string; actor?: string; dateFrom?: string; dateTo?: string }) => {
     const q = new URLSearchParams()
     if (params.cursor) q.set('cursor', params.cursor)
     if (params.limit) q.set('limit', String(params.limit))
     if (params.action) q.set('action', params.action)
     if (params.actor) q.set('actor', params.actor)
+    if (params.dateFrom) q.set('dateFrom', params.dateFrom)
+    if (params.dateTo) q.set('dateTo', params.dateTo)
     return apiFetch<AuditPage>(`${base()}/audits?${q}`, { headers: authHeaders(jwt) })
   },
 
-  exportAuditsUrl: (jwt: string, action?: string, actor?: string) => {
+  exportAuditsUrl: (jwt: string, action?: string, actor?: string, dateFrom?: string, dateTo?: string) => {
     const q = new URLSearchParams()
     if (action) q.set('action', action)
     if (actor) q.set('actor', actor)
+    if (dateFrom) q.set('dateFrom', dateFrom)
+    if (dateTo) q.set('dateTo', dateTo)
     return `${base()}/audits/export?${q}`
   },
 
@@ -86,5 +118,28 @@ export const adminApi = {
       method: 'POST',
       headers: authHeaders(jwt),
       body: JSON.stringify({ fromLedger, network }),
+    }),
+
+  getClaims: (jwt: string, params: { cursor?: string; limit?: number; search?: string; status?: AdminClaimStatus }) => {
+    const q = new URLSearchParams()
+    if (params.cursor) q.set('cursor', params.cursor)
+    if (params.limit) q.set('limit', String(params.limit))
+    if (params.search) q.set('search', params.search)
+    if (params.status) q.set('status', params.status)
+    return apiFetch<AdminClaimsPage>(`${base()}/claims?${q}`, { headers: authHeaders(jwt) })
+  },
+
+  overrideClaimStatus: (jwt: string, claimId: number, status: AdminClaimStatus, reason: string) =>
+    apiFetch<AdminClaim>(`${base()}/claims/${claimId}/override`, {
+      method: 'POST',
+      headers: authHeaders(jwt),
+      body: JSON.stringify({ status, reason }),
+    }),
+
+  bulkUpdateClaims: (jwt: string, claimIds: number[], status: AdminClaimStatus, dryRun: boolean) =>
+    apiFetch<BulkUpdateDryRunResult | BulkUpdateResult>(`${base()}/claims/bulk-update`, {
+      method: 'POST',
+      headers: authHeaders(jwt),
+      body: JSON.stringify({ claimIds, status, dryRun }),
     }),
 }

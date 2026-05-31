@@ -31,6 +31,8 @@ export interface EnvironmentVariables {
   DEFAULT_TOKEN_CONTRACT_ID_FUTURENET: string;
   INDEXER_GAP_ALERT_THRESHOLD_LEDGERS: number;
   INDEXER_GAP_ALERT_COOLDOWN_MS: number;
+  INDEXER_BATCH_SIZE: number;
+  MAX_BACKFILL_LEDGER_RANGE: number;
   IPFS_PROVIDER: IpfsProvider;
   PINATA_API_KEY: string;
   PINATA_API_SECRET: string;
@@ -52,6 +54,7 @@ export interface EnvironmentVariables {
   NONCE_TTL_SECONDS: number;
   FRONTEND_ORIGINS: string;
   ADMIN_CORS_ORIGINS: string;
+  CORS_ALLOWED_ORIGINS: string;
   LOG_LEVEL: LogLevel;
   CACHE_TTL_SECONDS: number;
   QUOTE_SIMULATION_CACHE_ENABLED: 'true' | 'false' | '1' | '0';
@@ -124,6 +127,12 @@ export interface EnvironmentVariables {
    * Remove after the overlap window (≥ JWT_EXPIRES_IN) has elapsed.
    */
   JWT_SECRET_NEXT: string;
+  /** Maximum claim evidence file size in bytes. Defaults to 10 MB. */
+  EVIDENCE_MAX_BYTES: number;
+  /** Max evidence uploads per wallet per rate-limit window. */
+  EVIDENCE_UPLOAD_RATE_LIMIT: number;
+  /** Evidence upload rate-limit window in seconds. */
+  EVIDENCE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: number;
 }
 
 export type EnvKey = keyof EnvironmentVariables;
@@ -413,6 +422,22 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     example: '3600000',
     required: 'required',
     schema: Joi.number().integer().min(60000).default(3600000),
+  },
+  INDEXER_BATCH_SIZE: {
+    key: 'INDEXER_BATCH_SIZE',
+    section: 'Stellar',
+    description: 'Max ledger events fetched per Soroban RPC call (1–100, default 50).',
+    example: '50',
+    required: 'optional',
+    schema: Joi.number().integer().min(1).max(100).default(50),
+  },
+  MAX_BACKFILL_LEDGER_RANGE: {
+    key: 'MAX_BACKFILL_LEDGER_RANGE',
+    section: 'Stellar',
+    description: 'Maximum ledger range allowed per backfill request. Requests exceeding this are rejected before any jobs are created.',
+    example: '100000',
+    required: 'optional',
+    schema: Joi.number().integer().min(1).default(100000),
   },
   IPFS_PROVIDER: {
     key: 'IPFS_PROVIDER',
@@ -1196,6 +1221,30 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     secret: true,
     schema: Joi.string().min(32).allow('').default(''),
   },
+  EVIDENCE_MAX_BYTES: {
+    key: 'EVIDENCE_MAX_BYTES',
+    section: 'Evidence uploads',
+    description: 'Maximum allowed claim evidence file size in bytes. Defaults to 10 MB.',
+    example: '10485760',
+    required: 'optional',
+    schema: Joi.number().integer().min(1).default(10485760),
+  },
+  EVIDENCE_UPLOAD_RATE_LIMIT: {
+    key: 'EVIDENCE_UPLOAD_RATE_LIMIT',
+    section: 'Evidence uploads',
+    description: 'Maximum evidence uploads per wallet per rate-limit window.',
+    example: '5',
+    required: 'optional',
+    schema: Joi.number().integer().min(1).default(5),
+  },
+  EVIDENCE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: {
+    key: 'EVIDENCE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS',
+    section: 'Evidence uploads',
+    description: 'Evidence upload rate-limit window in seconds.',
+    example: '3600',
+    required: 'optional',
+    schema: Joi.number().integer().min(1).default(3600),
+  },
 };
 
 export const ENV_KEYS = Object.keys(ENV_DEFINITIONS) as EnvKey[];
@@ -1206,6 +1255,50 @@ export function buildValidationSchema(): Joi.ObjectSchema<EnvironmentVariables> 
   ) as Record<string, Joi.Schema>;
 
   return Joi.object(shape) as Joi.ObjectSchema<EnvironmentVariables>;
+}
+
+export function renderEnvDocs(): string {
+  const lines: string[] = [
+    '# Environment Variables Reference',
+    '',
+    '> **Auto-generated** from `backend/src/config/env.definitions.ts`.',
+    '> Do not edit manually — run `npm run env:example:generate` in `backend/` to regenerate.',
+    '',
+    '## Requirement labels',
+    '',
+    '| Label | Meaning |',
+    '|---|---|',
+    '| `required` | Application boot fails immediately if missing or invalid |',
+    '| `optional` | Only needed when the related feature/integration is enabled |',
+    '| `conditional` | Required when another setting enables that integration |',
+    '',
+    '---',
+    '',
+  ];
+
+  const sections = new Map<string, EnvDefinition[]>();
+  for (const key of ENV_KEYS) {
+    const def = ENV_DEFINITIONS[key];
+    const bucket = sections.get(def.section) ?? [];
+    bucket.push(def);
+    sections.set(def.section, bucket);
+  }
+
+  for (const [section, defs] of sections.entries()) {
+    lines.push(`## ${section}`, '');
+    lines.push('| Variable | Required | Description | Default |');
+    lines.push('|---|---|---|---|');
+    for (const def of defs) {
+      const defaultVal = def.example !== '' ? `\`${def.example}\`` : '—';
+      const secret = def.secret ? ' *(secret)*' : '';
+      lines.push(
+        `| \`${def.key}\` | \`${def.required}\` | ${def.description}${secret} | ${defaultVal} |`,
+      );
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n').trimEnd() + '\n';
 }
 
 export function renderEnvExample(): string {
