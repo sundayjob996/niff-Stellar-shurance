@@ -94,6 +94,22 @@ pub fn validate_quorum_bps(bps: u32) -> Result<(), Error> {
     Ok(())
 }
 
+pub fn validate_protocol_fee_bps(bps: u32) -> Result<(), Error> {
+    use crate::types::PROTOCOL_FEE_BPS_MAX;
+    if bps > PROTOCOL_FEE_BPS_MAX {
+        return Err(Error::ProtocolFeeOutOfBounds);
+    }
+    Ok(())
+}
+
+pub fn validate_min_solvency_ratio_bps(bps: u32) -> Result<(), Error> {
+    use crate::types::{MIN_SOLVENCY_RATIO_BPS_MAX, MIN_SOLVENCY_RATIO_BPS_MIN};
+    if !(MIN_SOLVENCY_RATIO_BPS_MIN..=MIN_SOLVENCY_RATIO_BPS_MAX).contains(&bps) {
+        return Err(Error::SolvencyRatioOutOfBounds);
+    }
+    Ok(())
+}
+
 pub fn check_policy(policy: &Policy) -> Result<(), Error> {
     if policy.coverage <= 0 {
         return Err(Error::ZeroCoverage);

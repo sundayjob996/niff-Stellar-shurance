@@ -146,6 +146,9 @@ impl NiffyInsure {
         storage::set_token(&env, &token);
         storage::set_multiplier_table(&env, &premium::default_multiplier_table(&env));
         storage::set_allowed_asset(&env, &token, true);
+        storage::set_protocol_fee_bps(&env, 0);
+        storage::set_fee_recipient(&env, &env.current_contract_address());
+        storage::set_min_solvency_ratio_bps(&env, 0);
         storage::set_voting_duration_ledgers(&env, ledger::VOTE_WINDOW_LEDGERS);
         storage::set_quorum_bps(&env, types::DEFAULT_QUORUM_BPS);
         admin::emit_admin_action(&env, &admin, "initialize");
@@ -173,6 +176,23 @@ impl NiffyInsure {
     pub fn get_treasury_balance(env: Env) -> i128 {
         let token_addr = storage::get_token(&env);
         crate::token::get_treasury_balance(&env, &token_addr)
+    }
+
+    pub fn get_protocol_fee_bps(env: Env) -> u32 {
+        storage::get_protocol_fee_bps(&env)
+    }
+
+    pub fn get_fee_recipient(env: Env) -> Address {
+        storage::get_fee_recipient(&env)
+    }
+
+    pub fn get_min_solvency_ratio_bps(env: Env) -> u32 {
+        storage::get_min_solvency_ratio_bps(&env)
+    }
+
+    pub fn check_solvency_ratio(env: Env, new_coverage: i128) -> bool {
+        let token_addr = storage::get_token(&env);
+        policy::check_solvency_ratio(&env, &token_addr, new_coverage)
     }
 
     /// Pure quote path: reads config and computes premium only.
@@ -390,6 +410,45 @@ impl NiffyInsure {
         claim::vote_on_claim(&env, &voter, claim_id, &vote)
     }
 
+    /// Holder-authenticated delegation of vote weight to another address.
+    ///
+    /// Delegations are checked against the current ledger and expire at
+    /// `expiry_ledger` inclusively.
+    pub fn delegate_vote(
+        env: Env,
+        delegator: Address,
+        delegate: Address,
+        expiry_ledger: u32,
+    ) -> Result<(), validate::Error> {
+        delegator.require_auth();
+        storage::bump_instance(&env);
+
+        if delegator == delegate {
+            return Err(validate::Error::CircularDelegation);
+        }
+
+        let now = env.ledger().sequence();
+        let resolved_target = storage::resolve_vote_delegation_target(&env, &delegate, now)?;
+        if resolved_target == delegator {
+            return Err(validate::Error::CircularDelegation);
+        }
+
+        storage::set_vote_delegation(
+            &env,
+            &delegator,
+            &types::VoteDelegation {
+                delegate,
+                expiry_ledger,
+            },
+        );
+        Ok(())
+    }
+
+    /// Read-only: current delegation binding for a holder, if any.
+    pub fn get_vote_delegation(env: Env, delegator: Address) -> Option<types::VoteDelegation> {
+        storage::get_vote_delegation(&env, &delegator)
+    }
+
     /// Permissionless keeper hook: bump persistent TTL for the claim voter snapshot.
     /// Does not alter eligibility or tallies.
     pub fn refresh_snapshot(env: Env, claim_id: u64) -> Result<(), validate::Error> {
@@ -474,6 +533,53 @@ impl NiffyInsure {
         Ok(())
     }
 
+    pub fn admin_set_protocol_fee_bps(env: Env, fee_bps: u32) -> Result<(), validate::Error> {
+        let admin = storage::get_admin(&env);
+        admin.require_auth();
+        storage::bump_instance(&env);
+        validate::validate_protocol_fee_bps(fee_bps)?;
+        let old = storage::get_protocol_fee_bps(&env);
+        storage::set_protocol_fee_bps(&env, fee_bps);
+        ProtocolFeeUpdated {
+            old_bps: old,
+            new_bps: fee_bps,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    pub fn admin_set_fee_recipient(env: Env, recipient: Address) -> Result<(), validate::Error> {
+        let admin = storage::get_admin(&env);
+        admin.require_auth();
+        storage::bump_instance(&env);
+        let old = storage::get_fee_recipient(&env);
+        storage::set_fee_recipient(&env, &recipient);
+        FeeRecipientUpdated {
+            old_recipient: old,
+            new_recipient: recipient,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    pub fn admin_set_min_solvency_ratio_bps(
+        env: Env,
+        ratio_bps: u32,
+    ) -> Result<(), validate::Error> {
+        let admin = storage::get_admin(&env);
+        admin.require_auth();
+        storage::bump_instance(&env);
+        validate::validate_min_solvency_ratio_bps(ratio_bps)?;
+        let old = storage::get_min_solvency_ratio_bps(&env);
+        storage::set_min_solvency_ratio_bps(&env, ratio_bps);
+        MinSolvencyRatioUpdated {
+            old_bps: old,
+            new_bps: ratio_bps,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
     // ── Grace period ──────────────────────────────────────────────────────────
 
     /// Admin-only: set the grace period (in ledgers) after nominal expiry during
@@ -506,6 +612,21 @@ impl NiffyInsure {
 
     pub fn get_claim(env: Env, claim_id: u64) -> Result<types::Claim, validate::Error> {
         claim::get_claim(&env, claim_id)
+    }
+
+    /// Batch-read claims in one simulation/RPC round-trip.
+    ///
+    /// Returns positions aligned with `ids`, using `None` for missing claim IDs.
+    /// More than `CLAIM_BATCH_GET_MAX` IDs reverts before any storage reads.
+    pub fn get_claims_batch(env: Env, ids: Vec<u64>) -> Vec<Option<types::Claim>> {
+        if ids.len() > types::CLAIM_BATCH_GET_MAX {
+            panic_with_error!(&env, validate::Error::ClaimBatchTooLarge);
+        }
+        let mut out: Vec<Option<types::Claim>> = Vec::new(&env);
+        for id in ids.iter() {
+            out.push_back(storage::get_claim(&env, id));
+        }
+        out
     }
 
     pub fn get_claim_counter(env: Env) -> u64 {

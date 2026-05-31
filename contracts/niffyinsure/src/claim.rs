@@ -479,6 +479,11 @@ pub fn vote_on_claim(
         return Err(Error::NotEligibleVoter);
     }
 
+    let resolved_target = storage::resolve_vote_delegation_target(env, voter, now)?;
+    if resolved_target != *voter {
+        return Err(Error::VoteDelegated);
+    }
+
     // Duplicate vote check — before any write.
     if storage::get_vote(env, claim_id, voter).is_some() {
         return Err(Error::DuplicateVote);
@@ -487,6 +492,7 @@ pub fn vote_on_claim(
     storage::set_vote(env, claim_id, voter, vote);
 
     let status_before = claim.status.clone();
+    let vote_weight = storage::delegated_vote_weight(env, claim_id, voter, now)?;
 
     // Compute vote weight: proportional to active policy count when governance token
     // is enabled (capped by max_weight_cap), or 1 when disabled.

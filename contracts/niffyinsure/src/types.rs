@@ -71,6 +71,13 @@ pub const QUORUM_BPS_MAX: u32 = 10_000;
 /// One full turn-out / 100% weight in bps (used in the quorum formula below).
 pub const QUORUM_BPS_DENOMINATOR: u32 = 10_000;
 
+/// Absolute maximum protocol fee in basis points.
+pub const PROTOCOL_FEE_BPS_MAX: u32 = 1_000;
+
+/// Solvency threshold bounds in basis points. `100_000` = 1,000%.
+pub const MIN_SOLVENCY_RATIO_BPS_MIN: u32 = 0;
+pub const MIN_SOLVENCY_RATIO_BPS_MAX: u32 = 100_000;
+
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -243,6 +250,14 @@ pub enum VoteOption {
     Reject,
 }
 
+/// Active vote delegation binding for a holder.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VoteDelegation {
+    pub delegate: Address,
+    pub expiry_ledger: u32,
+}
+
 /// Reason for policy termination.
 ///
 /// GOVERNANCE NOTE: `ExcessiveRejections` is set by the claims engine
@@ -328,6 +343,12 @@ pub const PAGE_SIZE_MAX: u32 = 20;
 /// simulation and unfair resource use. Unlike `list_policies` (which silently clamps
 /// `limit`), an over-cap batch **reverts** so callers chunk explicitly.
 pub const POLICY_BATCH_GET_MAX: u32 = PAGE_SIZE_MAX;
+
+/// Maximum claim IDs in a single `get_claims_batch` call.
+///
+/// This intentionally matches [`PAGE_SIZE_MAX`] so dashboard simulations can
+/// bulk-load claims without unbounded metered storage reads.
+pub const CLAIM_BATCH_GET_MAX: u32 = PAGE_SIZE_MAX;
 
 /// Key for batched policy reads (`get_policies_batch`).
 #[contracttype]

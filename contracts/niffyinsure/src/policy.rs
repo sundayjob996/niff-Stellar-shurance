@@ -88,6 +88,17 @@ pub struct PolicyInitiated {
     pub end_ledger: u32,
 }
 
+/// Emitted when a protocol fee is collected from a premium payment.
+#[contractevent(topics = ["niffyinsure", "protocol_fee_collected"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolFeeCollected {
+    #[topic]
+    pub policy_id: u32,
+    pub version: u32,
+    pub fee_amount: i128,
+    pub recipient: Address,
+}
+
 /// Emitted when the payout beneficiary is set or changed (including at policy initiation when non-empty).
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -268,11 +279,48 @@ pub fn map_quote_error(env: &Env, err: Error) -> QuoteFailure {
         Error::PayoutDeadlineNotReached => {
             "payout timeout is not yet due: the approved claim must wait for its deadline to pass"
         },
+        Error::VoteDelegated => "direct vote rejected because the caller has an active delegation",
+        Error::CircularDelegation => "delegation would create a cycle",
+        Error::ProtocolFeeOutOfBounds => {
+            "protocol fee basis points exceed the configured maximum"
+        },
+        Error::SolvencyRatioOutOfBounds => {
+            "minimum solvency ratio basis points outside documented bounds"
+        },
+        Error::ClaimBatchTooLarge => "claim batch exceeds maximum allowed IDs per call",
     };
     QuoteFailure {
         code: err as u32,
         message: String::from_str(env, message),
     }
+}
+
+/// Returns true when treasury balance covers approved obligations plus `new_coverage`
+/// at or above the configured minimum solvency ratio.
+pub fn check_solvency_ratio(env: &Env, asset: &Address, new_coverage: i128) -> bool {
+    let min_ratio_bps = storage::get_min_solvency_ratio_bps(env);
+    if min_ratio_bps == 0 {
+        return true;
+    }
+    if new_coverage < 0 {
+        return false;
+    }
+
+    let obligations = storage::outstanding_approved_claim_obligations(env, asset)
+        .saturating_add(new_coverage);
+    if obligations <= 0 {
+        return true;
+    }
+
+    let balance = token::get_treasury_balance(env, asset);
+    if balance < 0 {
+        return false;
+    }
+
+    let Some(numerator) = balance.checked_mul(10_000) else {
+        return true;
+    };
+    numerator / obligations >= min_ratio_bps as i128
 }
 
 /// Turns an accepted quote into an enforceable on-chain policy.
@@ -347,6 +395,9 @@ pub fn initiate_policy(
     if base_amount <= 0 {
         return Err(PolicyError::InvalidCoverage);
     }
+    if !check_solvency_ratio(env, &asset, base_amount) {
+        return Err(PolicyError::InsufficientSolvency);
+    }
 
     let deductible_stored = match deductible {
         None => None,
@@ -378,6 +429,20 @@ pub fn initiate_policy(
         return Err(PolicyError::InvalidPremium);
     }
 
+    let fee_bps = storage::get_protocol_fee_bps(env);
+    let fee_recipient = storage::get_fee_recipient(env);
+    let fee_amount = if fee_bps == 0 {
+        0
+    } else {
+        premium_amount
+            .checked_mul(fee_bps as i128)
+            .ok_or(PolicyError::PremiumOverflow)?
+            / 10_000
+    };
+    let treasury_amount = premium_amount
+        .checked_sub(fee_amount)
+        .ok_or(PolicyError::PremiumOverflow)?;
+
     // Allocate unique per-holder policy_id.
     let policy_id = storage::next_policy_id(env, &holder);
 
@@ -385,9 +450,16 @@ pub fn initiate_policy(
         return Err(PolicyError::DuplicatePolicyId);
     }
 
-    // Premium transfer: holder -> treasury using the policy's bound asset.
+    // Premium transfer: holder -> treasury and fee recipient using the policy's bound asset.
     // Done BEFORE any durable writes so failure leaves no partial state.
-    token::collect_premium(env, &holder, &asset, premium_amount);
+    token::collect_premium_with_fee(
+        env,
+        &holder,
+        &asset,
+        treasury_amount,
+        &fee_recipient,
+        fee_amount,
+    );
 
     let current_ledger = env.ledger().sequence();
     let end_ledger = current_ledger
@@ -418,6 +490,16 @@ pub fn initiate_policy(
 
     storage::set_policy(env, &holder, policy_id, &policy);
     storage::add_voter(env, &holder);
+
+    if fee_amount > 0 {
+        ProtocolFeeCollected {
+            policy_id,
+            version: POLICY_EVENT_VERSION,
+            fee_amount,
+            recipient: fee_recipient.clone(),
+        }
+        .publish(env);
+    }
 
     PolicyInitiated {
         version: POLICY_EVENT_VERSION,

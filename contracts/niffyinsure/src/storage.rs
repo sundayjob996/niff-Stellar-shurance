@@ -1,7 +1,9 @@
 use soroban_sdk::{contracttype, Address, Env, Map, String, Vec};
 
 use crate::ledger;
-use crate::types::{Claim, MultiplierTable, Policy, RollingClaimWindowState, VoteOption};
+use crate::types::{
+    Claim, MultiplierTable, Policy, RollingClaimWindowState, VoteDelegation, VoteOption,
+};
 
 // ── TTL constants ─────────────────────────────────────────────────────────────
 ///
@@ -70,6 +72,12 @@ pub enum DataKey {
     Token,
     /// Address where collected premiums are sent.
     Treasury,
+    /// Basis-point protocol fee deducted from each premium payment.
+    ProtocolFeeBps,
+    /// Address receiving the protocol fee portion of premiums.
+    FeeRecipient,
+    /// Minimum treasury solvency ratio required before binding new policies.
+    MinSolvencyRatioBps,
     PremiumTable,
     CalcAddress,
     /// Boolean allowlist flag per asset contract address.
@@ -127,6 +135,8 @@ pub enum DataKey {
     OpenClaim(Address, u32),
     /// (claim_id, voter_address) -> VoteOption; immutable after first write
     Vote(u64, Address),
+    /// Delegator -> active vote delegation binding.
+    VoteDelegations,
     /// Snapshot of eligible voters captured at claim-filing time.
     ClaimVoters(u64),
     /// Last ledger at which `holder` filed a claim (rate-limit anchor).
@@ -311,6 +321,63 @@ pub fn get_treasury(env: &Env) -> Address {
         .instance()
         .get(&DataKey::Treasury)
         .unwrap_or_else(|| env.current_contract_address())
+}
+
+// ── Protocol fee config (instance) ───────────────────────────────────────────
+
+pub fn set_protocol_fee_bps(env: &Env, bps: u32) {
+    env.storage().instance().set(&DataKey::ProtocolFeeBps, &bps);
+}
+
+pub fn get_protocol_fee_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ProtocolFeeBps)
+        .unwrap_or(0)
+}
+
+pub fn set_fee_recipient(env: &Env, recipient: &Address) {
+    env.storage().instance().set(&DataKey::FeeRecipient, recipient);
+}
+
+pub fn get_fee_recipient(env: &Env) -> Address {
+    env.storage()
+        .instance()
+        .get(&DataKey::FeeRecipient)
+        .unwrap_or_else(|| env.current_contract_address())
+}
+
+// ── Solvency config (instance) ───────────────────────────────────────────────
+
+pub fn set_min_solvency_ratio_bps(env: &Env, bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MinSolvencyRatioBps, &bps);
+}
+
+pub fn get_min_solvency_ratio_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MinSolvencyRatioBps)
+        .unwrap_or(0)
+}
+
+pub fn outstanding_approved_claim_obligations(env: &Env, asset: &Address) -> i128 {
+    let claim_counter = get_claim_counter(env);
+    let mut total: i128 = 0;
+
+    for claim_id in 1..=claim_counter {
+        if let Some(claim) = get_claim(env, claim_id) {
+            if claim.status == crate::types::ClaimStatus::Approved && claim.asset == *asset {
+                let net = claim.amount.saturating_sub(claim.deductible);
+                if net > 0 {
+                    total = total.saturating_add(net);
+                }
+            }
+        }
+    }
+
+    total
 }
 
 // ── Governance: claim voting duration (instance) ─────────────────────────────
@@ -734,6 +801,87 @@ pub fn get_vote(env: &Env, claim_id: u64, voter: &Address) -> Option<VoteOption>
     env.storage()
         .persistent()
         .get(&DataKey::Vote(claim_id, voter.clone()))
+}
+
+// ── Vote delegations (instance) ───────────────────────────────────────────────
+
+pub fn get_vote_delegations(env: &Env) -> Map<Address, VoteDelegation> {
+    env.storage()
+        .instance()
+        .get(&DataKey::VoteDelegations)
+        .unwrap_or_else(|| Map::new(env))
+}
+
+pub fn set_vote_delegations(env: &Env, delegations: &Map<Address, VoteDelegation>) {
+    env.storage()
+        .instance()
+        .set(&DataKey::VoteDelegations, delegations);
+}
+
+pub fn get_vote_delegation(env: &Env, delegator: &Address) -> Option<VoteDelegation> {
+    get_vote_delegations(env).get(delegator.clone())
+}
+
+pub fn set_vote_delegation(env: &Env, delegator: &Address, delegation: &VoteDelegation) {
+    let mut delegations = get_vote_delegations(env);
+    delegations.set(delegator.clone(), delegation.clone());
+    set_vote_delegations(env, &delegations);
+}
+
+pub fn remove_vote_delegation(env: &Env, delegator: &Address) {
+    let mut delegations = get_vote_delegations(env);
+    if delegations.remove(delegator.clone()).is_some() {
+        set_vote_delegations(env, &delegations);
+    }
+}
+
+pub fn has_active_vote_delegation(env: &Env, delegator: &Address, now: u32) -> bool {
+    get_vote_delegation(env, delegator)
+        .map(|delegation| delegation.expiry_ledger >= now)
+        .unwrap_or(false)
+}
+
+pub fn resolve_vote_delegation_target(
+    env: &Env,
+    start: &Address,
+    now: u32,
+) -> Result<Address, crate::validate::Error> {
+    let mut current = start.clone();
+    let mut seen: Vec<Address> = Vec::new(env);
+
+    loop {
+        if seen.iter().any(|addr| addr == current) {
+            return Err(crate::validate::Error::CircularDelegation);
+        }
+        seen.push_back(current.clone());
+
+        let Some(delegation) = get_vote_delegation(env, &current) else {
+            return Ok(current);
+        };
+
+        if delegation.expiry_ledger < now {
+            return Ok(current);
+        }
+
+        current = delegation.delegate;
+    }
+}
+
+pub fn delegated_vote_weight(
+    env: &Env,
+    claim_id: u64,
+    target: &Address,
+    now: u32,
+) -> Result<u32, crate::validate::Error> {
+    let voters = get_claim_voters(env, claim_id);
+    let mut total: u32 = 0;
+    for voter in voters.iter() {
+        let resolved = resolve_vote_delegation_target(env, &voter, now)?;
+        if resolved == *target {
+            total = total.saturating_add(get_active_policy_count(env, &voter));
+        }
+    }
+    Ok(total)
 }
 
 // ── Claim voters snapshot (persistent) ───────────────────────────────────────
