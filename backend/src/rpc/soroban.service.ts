@@ -18,7 +18,7 @@ import { ConfigService } from '@nestjs/config';
 import CircuitBreaker from 'opossum';
 import { MetricsService } from '../metrics/metrics.service';
 import { getNetworkConfig } from '../config/network.config';
-import { POLICY_BATCH_GET_MAX } from '../chain/chain.constants';
+import { CLAIM_BATCH_GET_MAX, POLICY_BATCH_GET_MAX } from '../chain/chain.constants';
 import {
   Account,
   BASE_FEE,
@@ -266,6 +266,16 @@ export class SorobanService implements OnModuleInit, OnModuleDestroy {
       e.includes('policy_batch') ||
       // ContractError tag 50 = PolicyBatchTooLarge
       /\b50\b/.test(error)
+    );
+  }
+
+  private isClaimBatchTooLargeSimulation(error: string): boolean {
+    const e = error.toLowerCase();
+    return (
+      e.includes('claimbatch') ||
+      e.includes('claim_batch') ||
+      // ContractError tag 60 = ClaimBatchTooLarge
+      /\b60\b/.test(error)
     );
   }
 
@@ -707,6 +717,54 @@ export class SorobanService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  async tryEmitClaimStatusOverrideEvent(args: {
+    sourceAccount?: string;
+    claimId: number;
+    oldStatus: string;
+    newStatus: string;
+    reason: string;
+    actor: string;
+  }): Promise<void> {
+    await this.trackRpc('emit_claim_override_event', async () => {
+      const sourceAccount =
+        args.sourceAccount ??
+        this.configService.get<string>('SOROBAN_ADMIN_PUBLIC_KEY') ??
+        this.configService.get<string>('ADMIN_PUBLIC_KEY');
+      if (!sourceAccount) {
+        throw new BadRequestException({
+          code: 'ADMIN_SOURCE_ACCOUNT_REQUIRED',
+          message: 'No admin source account configured for Soroban override event emission.',
+        });
+      }
+
+      const server = this.makeServer();
+      const account = await this.loadAccount(server, sourceAccount);
+      const contract = new Contract(this.contractId);
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          contract.call(
+            'admin_emit_claim_status_override',
+            nativeToScVal(args.claimId, { type: 'u64' }),
+            nativeToScVal(args.oldStatus, { type: 'string' }),
+            nativeToScVal(args.newStatus, { type: 'string' }),
+            nativeToScVal(args.reason, { type: 'string' }),
+            nativeToScVal(args.actor, { type: 'string' }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const simulation = await server.simulateTransaction(tx);
+      if (Api.isSimulationError(simulation)) {
+        const err = simulation as SorobanRpc.Api.SimulateTransactionErrorResponse;
+        throw new BadRequestException({ code: 'OVERRIDE_EVENT_SIMULATION_FAILED', message: err.error });
+      }
+    });
+  }
+
   /**
    * Simulate `get_policies_batch(Vec<PolicyLookupKey>)` → `Vec<Option<Policy>>`.
    * One RPC round-trip for dashboard bulk loads; order matches `keys`.
@@ -783,6 +841,99 @@ export class SorobanService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException({
         code: 'SIMULATION_DECODE_FAILED',
         message: 'get_policies_batch: unexpected return shape from simulation.',
+      });
+    }
+
+    return native.map((entry: unknown) => {
+      if (entry === null || entry === undefined) {
+        return null;
+      }
+      if (typeof entry === 'object' && entry !== null) {
+        return entry as Record<string, unknown>;
+      }
+      return null;
+    });
+  }
+
+  /**
+   * Simulate `get_claims_batch(Vec<u64>)` -> `Vec<Option<Claim>>`.
+   * One RPC round-trip for claims-board bulk dashboard loads; order matches `ids`.
+   */
+  async simulateGetClaimsBatch(args: {
+    ids: number[];
+    sourceAccount?: string;
+  }): Promise<(Record<string, unknown> | null)[]> {
+    return this.trackRpc('simulate_get_claims_batch', () =>
+      this._simulateGetClaimsBatch(args),
+    );
+  }
+
+  private async _simulateGetClaimsBatch(args: {
+    ids: number[];
+    sourceAccount?: string;
+  }): Promise<(Record<string, unknown> | null)[]> {
+    if (!this.contractId) {
+      throw new BadRequestException({
+        code: 'CONTRACT_NOT_INITIALIZED',
+        message:
+          'CONTRACT_ID is not configured on the server; cannot simulate get_claims_batch.',
+      });
+    }
+    if (args.ids.length > CLAIM_BATCH_GET_MAX) {
+      throw new BadRequestException({
+        code: 'CLAIM_BATCH_TOO_LARGE',
+        message: `At most ${CLAIM_BATCH_GET_MAX} claim IDs per batch (on-chain CLAIM_BATCH_GET_MAX).`,
+      });
+    }
+    if (args.ids.length === 0) {
+      return [];
+    }
+    if (!args.sourceAccount) {
+      throw new BadRequestException({
+        code: 'SOURCE_ACCOUNT_REQUIRED',
+        message: 'source_account is required when simulating a non-empty claim batch.',
+      });
+    }
+
+    const server = this.makeServer();
+    const account = await this.loadAccount(server, args.sourceAccount);
+    const contract = new Contract(this.contractId);
+    const idsScVal = xdr.ScVal.scvVec(
+      args.ids.map((id) => nativeToScVal(id, { type: 'u64' })),
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(contract.call('get_claims_batch', idsScVal))
+      .setTimeout(30)
+      .build();
+
+    const simulation = await server.simulateTransaction(tx);
+    if (Api.isSimulationError(simulation)) {
+      const err = simulation as SorobanRpc.Api.SimulateTransactionErrorResponse;
+      if (this.isClaimBatchTooLargeSimulation(err.error)) {
+        throw new BadRequestException({
+          code: 'CLAIM_BATCH_TOO_LARGE',
+          message: `At most ${CLAIM_BATCH_GET_MAX} claim IDs per batch (on-chain CLAIM_BATCH_GET_MAX).`,
+        });
+      }
+      this.mapSimulationError(err.error);
+    }
+
+    const success =
+      simulation as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const retval = success.result?.retval;
+    if (!retval) {
+      return [];
+    }
+
+    const native = scValToNative(retval) as unknown;
+    if (!Array.isArray(native)) {
+      throw new BadRequestException({
+        code: 'SIMULATION_DECODE_FAILED',
+        message: 'get_claims_batch: unexpected return shape from simulation.',
       });
     }
 
