@@ -57,6 +57,12 @@ pub enum AdminError {
     MaxEvidenceCountOutOfBounds = 117,
     /// Payout asset override is not allowlisted.
     PayoutAssetOverrideNotAllowlisted = 118,
+    /// Min evidence count exceeds current max evidence count.
+    MinEvidenceExceedsMax = 119,
+    /// Max weight cap must be > 0.
+    InvalidMaxWeightCap = 120,
+    /// Cooldown ledgers value is out of allowed bounds.
+    CooldownLedgersOutOfBounds = 121,
 }
 
 /// Payload for a treasury-rotation proposal.
@@ -654,5 +660,93 @@ pub fn set_gateway_allowlist(env: &Env, gateways: Vec<String>) -> Result<(), Adm
     }
     .publish(env);
     emit_admin_action(env, &admin, "admin_set_gateway_allowlist");
+    Ok(())
+}
+
+// ── Min evidence count ────────────────────────────────────────────────────────
+
+#[contractevent(topics = ["niffyinsure", "min_evidence_count_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MinEvidenceCountUpdated {
+    pub old_count: u32,
+    pub new_count: u32,
+}
+
+/// Admin-only: set the minimum number of evidence entries required per claim.
+///
+/// `new_min` must not exceed the current max evidence count.
+/// Setting to 0 disables the minimum (default behaviour).
+pub fn set_min_evidence_count(env: &Env, new_min: u32) -> Result<(), AdminError> {
+    let _admin = require_admin(env);
+    let current_max = storage::get_max_evidence_count(env);
+    if new_min > current_max {
+        return Err(AdminError::MinEvidenceExceedsMax);
+    }
+    let old_count = storage::get_min_evidence_count(env);
+    storage::set_min_evidence_count(env, new_min);
+    MinEvidenceCountUpdated {
+        old_count,
+        new_count: new_min,
+    }
+    .publish(env);
+    Ok(())
+}
+
+// ── Max weight cap ────────────────────────────────────────────────────────────
+
+#[contractevent(topics = ["niffyinsure", "max_weight_cap_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaxWeightCapUpdated {
+    pub old_cap: i128,
+    pub new_cap: i128,
+}
+
+/// Admin-only: set the maximum vote weight any single voter can contribute.
+///
+/// Only meaningful when the `governance-token` feature is enabled at runtime.
+/// `new_cap` must be > 0. Falls back to `i128::MAX` (uncapped) when unset.
+pub fn set_max_weight_cap(env: &Env, new_cap: i128) -> Result<(), AdminError> {
+    let _admin = require_admin(env);
+    if new_cap <= 0 {
+        return Err(AdminError::InvalidMaxWeightCap);
+    }
+    let old_cap = storage::get_max_weight_cap(env);
+    storage::set_max_weight_cap(env, new_cap);
+    MaxWeightCapUpdated {
+        old_cap,
+        new_cap,
+    }
+    .publish(env);
+    Ok(())
+}
+
+// ── Cooldown ledgers ──────────────────────────────────────────────────────────
+
+/// Hard maximum for the cooldown window to prevent admin locking all claims indefinitely.
+pub const MAX_COOLDOWN_LEDGERS: u32 = 30 * crate::ledger::LEDGERS_PER_DAY; // ~30 days
+
+#[contractevent(topics = ["niffyinsure", "cooldown_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CooldownUpdated {
+    pub old_ledgers: u32,
+    pub new_ledgers: u32,
+}
+
+/// Admin-only: set the per-policy cooldown window (in ledgers) between claim resolutions.
+///
+/// `new_ledgers` must be in `[0, MAX_COOLDOWN_LEDGERS]`.
+/// 0 disables the cooldown (default). Does not affect claims already in `Processing`.
+pub fn set_cooldown_ledgers(env: &Env, new_ledgers: u32) -> Result<(), AdminError> {
+    let _admin = require_admin(env);
+    if new_ledgers > MAX_COOLDOWN_LEDGERS {
+        return Err(AdminError::CooldownLedgersOutOfBounds);
+    }
+    let old_ledgers = storage::get_cooldown_ledgers(env);
+    storage::set_cooldown_ledgers(env, new_ledgers);
+    CooldownUpdated {
+        old_ledgers,
+        new_ledgers,
+    }
+    .publish(env);
     Ok(())
 }

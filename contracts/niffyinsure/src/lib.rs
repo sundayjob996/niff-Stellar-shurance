@@ -249,6 +249,8 @@ impl NiffyInsure {
             53 => validate::Error::ClaimNotProcessing,
             54 => validate::Error::RollingClaimCapExceeded,
             55 => validate::Error::PayoutDeadlineNotReached,
+            56 => validate::Error::InsufficientEvidence,
+            57 => validate::Error::CooldownActive,
             _ => validate::Error::ClaimNotApproved,
         };
         policy::map_quote_error(&env, err)
@@ -1097,6 +1099,41 @@ impl NiffyInsure {
     /// Read the current max evidence count (falls back to compile-time default when unset).
     pub fn get_max_evidence_count(env: Env) -> u32 {
         storage::get_max_evidence_count(&env)
+    }
+
+    /// Admin-only: set the minimum number of evidence entries required per claim.
+    /// `new_min` must not exceed the current max evidence count.
+    /// Setting to 0 disables the minimum (default).
+    pub fn admin_set_min_evidence_count(env: Env, new_min: u32) -> Result<(), AdminError> {
+        admin::set_min_evidence_count(&env, new_min)
+    }
+
+    /// Read the current min evidence count (falls back to 0 when unset).
+    pub fn get_min_evidence_count(env: Env) -> u32 {
+        storage::get_min_evidence_count(&env)
+    }
+
+    /// Admin-only: set the maximum vote weight cap for governance-token-weighted voting.
+    /// Must be > 0. Falls back to i128::MAX (uncapped) when unset.
+    pub fn admin_set_max_weight_cap(env: Env, new_cap: i128) -> Result<(), AdminError> {
+        admin::set_max_weight_cap(&env, new_cap)
+    }
+
+    /// Read the current max weight cap (falls back to i128::MAX when unset).
+    pub fn get_max_weight_cap(env: Env) -> i128 {
+        storage::get_max_weight_cap(&env)
+    }
+
+    /// Admin-only: set the per-policy cooldown window in ledgers between claim resolutions.
+    /// 0 disables cooldown (default). Max is [`admin::MAX_COOLDOWN_LEDGERS`] (~30 days).
+    /// Does not affect claims already in `Processing`.
+    pub fn admin_set_cooldown_ledgers(env: Env, new_ledgers: u32) -> Result<(), AdminError> {
+        admin::set_cooldown_ledgers(&env, new_ledgers)
+    }
+
+    /// Read the current cooldown window in ledgers (falls back to 0 when unset).
+    pub fn get_cooldown_ledgers(env: Env) -> u32 {
+        storage::get_cooldown_ledgers(&env)
     }
 
     /// Admin-only: update the allowlisted IPFS gateway URL prefixes for evidence validation.

@@ -94,6 +94,17 @@ pub enum DataKey {
     /// Admin-configurable max evidence entries per claim (u32).
     /// Falls back to [`IMAGE_URLS_MAX`] when unset.
     MaxEvidenceCount,
+    /// Admin-configurable minimum evidence entries required per claim (u32).
+    /// Falls back to 0 when unset (no minimum enforced).
+    MinEvidenceCount,
+    /// Maximum vote weight any single voter can contribute when governance token is enabled.
+    /// Falls back to `i128::MAX` (uncapped) when unset.
+    MaxWeightCap,
+    /// Per-policy last resolved claim ledger for cooldown enforcement.
+    LastClaimResolvedLedger(Address, u32),
+    /// Admin-configurable cooldown window in ledgers between claim resolutions per policy.
+    /// Falls back to 0 (no cooldown) when unset.
+    CooldownLedgers,
     /// Last `end_ledger` for which a PolicyExpired event was emitted for this policy term.
     PolicyExpiredEventEndLedger(Address, u32),
     /// Allowlisted IPFS gateway URL prefixes for evidence validation.
@@ -866,6 +877,78 @@ pub fn get_max_evidence_count(env: &Env) -> u32 {
         .instance()
         .get(&DataKey::MaxEvidenceCount)
         .unwrap_or(crate::types::IMAGE_URLS_MAX)
+}
+
+// ── Min evidence count (instance) ────────────────────────────────────────────
+
+/// Set admin-configurable minimum evidence entries required per claim.
+/// Caller must enforce `min <= current max`.
+pub fn set_min_evidence_count(env: &Env, count: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MinEvidenceCount, &count);
+}
+
+/// Current minimum evidence count. Falls back to 0 (no minimum) when unset.
+pub fn get_min_evidence_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MinEvidenceCount)
+        .unwrap_or(0)
+}
+
+// ── Max weight cap (instance) ─────────────────────────────────────────────────
+
+/// Set admin-configurable maximum vote weight cap for governance token voting.
+pub fn set_max_weight_cap(env: &Env, cap: i128) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MaxWeightCap, &cap);
+}
+
+/// Current max weight cap. Falls back to `i128::MAX` (uncapped) when unset.
+pub fn get_max_weight_cap(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MaxWeightCap)
+        .unwrap_or(i128::MAX)
+}
+
+// ── Per-policy cooldown (persistent) ─────────────────────────────────────────
+
+/// Record the ledger at which the last claim for `(holder, policy_id)` was resolved.
+pub fn set_last_claim_resolved_ledger(env: &Env, holder: &Address, policy_id: u32, ledger: u32) {
+    let key = DataKey::LastClaimResolvedLedger(holder.clone(), policy_id);
+    env.storage().persistent().set(&key, &ledger);
+    env.storage().persistent().extend_ttl(
+        &key,
+        PERSISTENT_TTL_THRESHOLD,
+        PERSISTENT_TTL_EXTEND_TO,
+    );
+}
+
+/// Last resolved claim ledger for `(holder, policy_id)`. Returns `None` if no claim has been resolved.
+pub fn get_last_claim_resolved_ledger(env: &Env, holder: &Address, policy_id: u32) -> Option<u32> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::LastClaimResolvedLedger(holder.clone(), policy_id))
+}
+
+// ── Cooldown ledgers (instance) ───────────────────────────────────────────────
+
+/// Set admin-configurable cooldown window in ledgers between claim resolutions per policy.
+pub fn set_cooldown_ledgers(env: &Env, ledgers: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::CooldownLedgers, &ledgers);
+}
+
+/// Current cooldown window in ledgers. Falls back to 0 (no cooldown) when unset.
+pub fn get_cooldown_ledgers(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::CooldownLedgers)
+        .unwrap_or(0)
 }
 
 // ── Gateway allowlist (instance) ──────────────────────────────────────────────

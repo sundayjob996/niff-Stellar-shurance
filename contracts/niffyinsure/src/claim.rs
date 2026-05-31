@@ -488,9 +488,19 @@ pub fn vote_on_claim(
 
     let status_before = claim.status.clone();
 
+    // Compute vote weight: proportional to active policy count when governance token
+    // is enabled (capped by max_weight_cap), or 1 when disabled.
+    let vote_weight: u32 = if crate::governance_token::governance_token_effective_enabled(env) {
+        let balance = storage::get_holder_active_policy_count(env, voter) as i128;
+        let cap = storage::get_max_weight_cap(env);
+        balance.min(cap).max(1) as u32
+    } else {
+        1
+    };
+
     match vote {
-        VoteOption::Approve => claim.approve_votes += 1,
-        VoteOption::Reject => claim.reject_votes += 1,
+        VoteOption::Approve => claim.approve_votes = claim.approve_votes.saturating_add(vote_weight),
+        VoteOption::Reject => claim.reject_votes = claim.reject_votes.saturating_add(vote_weight),
     }
 
     let eligible = claim.eligible_voter_count;
@@ -536,6 +546,11 @@ pub fn vote_on_claim(
 
     let status = claim.status.clone();
     storage::set_claim(env, &claim);
+
+    // Record resolution ledger for per-policy cooldown enforcement.
+    if claim.status == ClaimStatus::Approved || claim.status == ClaimStatus::Rejected {
+        storage::set_last_claim_resolved_ledger(env, &claim.claimant, claim.policy_id, now);
+    }
 
     // Apply rejection side-effects after the claim record is persisted.
     // on_reject emits ClaimRejected, StrikeIncremented, and (if threshold
@@ -622,6 +637,11 @@ fn finalize_claim_inner(env: &Env, claim_id: u64) -> Result<ClaimStatus, Error> 
 
     let status = claim.status.clone();
     storage::set_claim(env, &claim);
+
+    // Record resolution ledger for per-policy cooldown enforcement.
+    if claim.status == ClaimStatus::Approved || claim.status == ClaimStatus::Rejected {
+        storage::set_last_claim_resolved_ledger(env, &claim.claimant, claim.policy_id, now);
+    }
 
     // Apply rejection side-effects after the claim record is persisted.
     if newly_rejected {
