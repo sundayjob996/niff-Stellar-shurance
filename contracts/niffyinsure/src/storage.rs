@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Env, Vec};
+use soroban_sdk::{contracttype, Address, Env, Map, String, Vec};
 
 use crate::ledger;
 use crate::types::{Claim, MultiplierTable, Policy, RollingClaimWindowState, VoteOption};

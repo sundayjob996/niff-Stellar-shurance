@@ -148,6 +148,30 @@ Indexers must surface `Withdrawn` status distinctly on the claims board.
 
 ---
 
+### `claim_status_changed` — claim status transition
+
+Emitted on every claim status transition, including filing, vote resolution,
+deadline finalization, payout, and withdrawal.
+
+**Topics:** `("niffyins", "claim_status_changed", claim_id: u64)`
+
+```json
+{
+  "version": 1,
+  "old_status": "Processing",
+  "new_status": "Approved",
+  "at_ledger": 1355527
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `old_status` | ClaimStatus | Status before the transition (`Pending` is used for initial filing) |
+| `new_status` | ClaimStatus | Status after the transition |
+| `at_ledger` | u32 (ledger) | Ledger of the transition |
+
+---
+
 ## Policy lifecycle events  (`namespace = "niffyinsure"`)
 
 ### `PolicyInitiated` — policy bound
@@ -188,9 +212,20 @@ Indexers must surface `Withdrawn` status distinctly on the claims board.
   "version": 1,
   "policy_id": 1,
   "premium": "500000",
-  "new_end_ledger": 3336967
+  "new_end_ledger": 3336967,
+  "old_coverage_type": "Basic",
+  "new_coverage_type": "Standard",
+  "old_coverage": "50000000",
+  "new_coverage": "100000000"
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `old_coverage_type` | CoverageTier | Coverage tier before renewal |
+| `new_coverage_type` | CoverageTier | Coverage tier applied for the renewed term |
+| `old_coverage` | string (stroops) | Coverage amount before renewal |
+| `new_coverage` | string (stroops) | Coverage amount applied for the renewed term |
 
 ---
 

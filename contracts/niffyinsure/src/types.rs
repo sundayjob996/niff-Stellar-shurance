@@ -396,6 +396,87 @@ pub struct MultiplierTable {
     pub version: u32,
 }
 
+// ── Event subscription filter system ─────────────────────────────────────────
+
+/// Maximum active subscriptions per address.
+pub const MAX_SUBSCRIPTIONS_PER_ADDRESS: u32 = 10;
+
+/// Event type filter for subscriptions.
+#[contracttype]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum EventType {
+    PolicyInitiated,
+    ClaimFiled,
+    ClaimFinalized,
+    ClaimPaid,
+    VoteCast,
+}
+
+/// An on-chain subscription filter for off-chain indexers.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Subscription {
+    pub id: u64,
+    pub owner: Address,
+    /// Event types this subscription matches.
+    pub event_types: Vec<EventType>,
+    /// Pet/policy IDs this subscription matches (empty = all).
+    pub pet_ids: Vec<u64>,
+    /// Ledger at which this subscription expires.
+    pub expires_at: u32,
+}
+
+// ── Vet specialization ────────────────────────────────────────────────────────
+
+/// Vet medical specializations. Certain record types require a matching specialization.
+#[contracttype]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Specialization {
+    GeneralPractice,
+    Surgery,
+    Dermatology,
+    Oncology,
+    Dentistry,
+}
+
+/// Medical record types that may require a specific vet specialization.
+#[contracttype]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum MedicalRecordType {
+    GeneralConsult,
+    SurgeryNotes,
+    DermatologyReport,
+    OncologyReport,
+    DentalProcedure,
+}
+
+impl MedicalRecordType {
+    /// Returns the required specialization for this record type, if any.
+    pub fn required_specialization(&self) -> Option<Specialization> {
+        match self {
+            MedicalRecordType::GeneralConsult => None,
+            MedicalRecordType::SurgeryNotes => Some(Specialization::Surgery),
+            MedicalRecordType::DermatologyReport => Some(Specialization::Dermatology),
+            MedicalRecordType::OncologyReport => Some(Specialization::Oncology),
+            MedicalRecordType::DentalProcedure => Some(Specialization::Dentistry),
+        }
+    }
+}
+
+// ── Region registry ───────────────────────────────────────────────────────────
+
+/// Configuration for a region code in the admin-managed registry.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegionConfig {
+    /// Optional parent region code (empty string = no parent).
+    pub parent: String,
+    /// Risk multiplier in basis points (10_000 = 1×). Applied on top of the tier multiplier.
+    pub risk_multiplier: i128,
+    /// Whether this region accepts new policies.
+    pub active: bool,
+}
+
 /// Identifies a single row in the multiplier table for granular admin updates.
 ///
 /// # Key format

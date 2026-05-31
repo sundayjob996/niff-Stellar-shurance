@@ -24,7 +24,7 @@ mod oracle;
 #[cfg(feature = "experimental")]
 pub use oracle::*;
 
-use soroban_sdk::{contract, contractevent, contractimpl, panic_with_error, Address, Env, Vec};
+use soroban_sdk::{contract, contractevent, contractimpl, panic_with_error, Address, Env, String, Vec};
 
 #[contract]
 pub struct NiffyInsure;
@@ -39,6 +39,23 @@ pub enum InitError {
     AlreadyInitialized = 1,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[soroban_sdk::contracterror]
+#[repr(u32)]
+pub enum VetError {
+    /// Vet does not have the required specialization for this record type.
+    InsufficientSpecialization = 1,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[soroban_sdk::contracterror]
+#[repr(u32)]
+pub enum SubscriptionError {
+    /// Address has reached the maximum of 10 active subscriptions.
+    TooManySubscriptions = 1,
+    /// Subscription not found or already expired.
+    NotFound = 2,
+}
 #[contractevent(topics = ["niffyinsure", "allowed_asset_updated"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AllowedAssetUpdated {
@@ -532,6 +549,189 @@ impl NiffyInsure {
         storage::get_calc_address(&env)
     }
 
+    // ── Region registry ───────────────────────────────────────────────────────
+
+    /// Admin-only: upsert a region code in the registry.
+    pub fn admin_set_region(
+        env: Env,
+        code: String,
+        config: types::RegionConfig,
+    ) {
+        let _admin = admin::require_admin(&env);
+        storage::bump_instance(&env);
+        let mut registry = storage::get_region_registry(&env);
+        registry.set(code, config);
+        storage::set_region_registry(&env, &registry);
+    }
+
+    /// Admin-only: remove a region code from the registry.
+    pub fn admin_remove_region(env: Env, code: String) {
+        let _admin = admin::require_admin(&env);
+        storage::bump_instance(&env);
+        let mut registry = storage::get_region_registry(&env);
+        registry.remove(code);
+        storage::set_region_registry(&env, &registry);
+    }
+
+    /// Read-only: get a region config by code.
+    pub fn get_region_config(
+        env: Env,
+        code: String,
+    ) -> Option<types::RegionConfig> {
+        storage::get_region_config(&env, &code)
+    }
+
+    // ── Treatment tracking ────────────────────────────────────────────────────
+
+    /// Record a treatment for a pet. Increments the treatment counter for `pet_id`.
+    /// Caller must be authenticated (holder of the associated policy).
+    pub fn record_treatment(env: Env, holder: Address, pet_id: u64) -> u64 {
+        holder.require_auth();
+        storage::bump_instance(&env);
+        storage::increment_treatment_count(&env, pet_id)
+    }
+
+    /// Read-only: total number of treatments recorded for `pet_id`.
+    pub fn get_treatment_count(env: Env, pet_id: u64) -> u64 {
+        storage::get_treatment_count(&env, pet_id)
+    }
+
+    // ── Vet specialization registry ───────────────────────────────────────────
+
+    /// Admin-only: register or update a vet's verified specializations.
+    pub fn admin_set_vet_specializations(
+        env: Env,
+        vet: Address,
+        specializations: Vec<types::Specialization>,
+    ) {
+        let _admin = admin::require_admin(&env);
+        storage::bump_instance(&env);
+        storage::set_vet_specializations(&env, &vet, &specializations);
+    }
+
+    /// Read-only: return the verified specializations for a vet address.
+    pub fn get_vet_specializations(env: Env, vet: Address) -> Vec<types::Specialization> {
+        storage::get_vet_specializations(&env, &vet)
+    }
+
+    /// Validate that `vet` is qualified to submit a record of `record_type`.
+    /// Reverts with `VetError::InsufficientSpecialization` if not qualified.
+    pub fn assert_vet_qualified(
+        env: Env,
+        vet: Address,
+        record_type: types::MedicalRecordType,
+    ) -> Result<(), VetError> {
+        match record_type.required_specialization() {
+            None => Ok(()),
+            Some(required) => {
+                if storage::vet_has_specialization(&env, &vet, &required) {
+                    Ok(())
+                } else {
+                    Err(VetError::InsufficientSpecialization)
+                }
+            }
+        }
+    }
+
+    // ── Event subscription filter system ──────────────────────────────────────
+
+    /// Register a subscription filter. TTL is `ttl_ledgers` from the current ledger.
+    /// Max 10 active subscriptions per address; expired subscriptions are pruned on registration.
+    /// Returns the new subscription ID.
+    pub fn register_subscription(
+        env: Env,
+        owner: Address,
+        event_types: Vec<types::EventType>,
+        pet_ids: Vec<u64>,
+        ttl_ledgers: u32,
+    ) -> Result<u64, SubscriptionError> {
+        owner.require_auth();
+        storage::bump_instance(&env);
+
+        let now = env.ledger().sequence();
+        let expires_at = now.saturating_add(ttl_ledgers);
+
+        // Prune expired subscriptions for this owner.
+        let mut ids = storage::get_owner_subscription_ids(&env, &owner);
+        let mut active: Vec<u64> = Vec::new(&env);
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            if let Some(sub) = storage::get_subscription(&env, id) {
+                if sub.expires_at >= now {
+                    active.push_back(id);
+                } else {
+                    storage::remove_subscription(&env, id);
+                }
+            }
+        }
+        ids = active;
+
+        if ids.len() >= types::MAX_SUBSCRIPTIONS_PER_ADDRESS {
+            return Err(SubscriptionError::TooManySubscriptions);
+        }
+
+        let sub_id = storage::next_subscription_id(&env);
+        let sub = types::Subscription {
+            id: sub_id,
+            owner: owner.clone(),
+            event_types,
+            pet_ids,
+            expires_at,
+        };
+        storage::set_subscription(&env, &sub);
+        ids.push_back(sub_id);
+        storage::set_owner_subscription_ids(&env, &owner, &ids);
+
+        Ok(sub_id)
+    }
+
+    /// Read-only: get a subscription by ID. Returns None if not found or expired.
+    pub fn get_subscription(env: Env, id: u64) -> Option<types::Subscription> {
+        let now = env.ledger().sequence();
+        storage::get_subscription(&env, id).filter(|s| s.expires_at >= now)
+    }
+
+    /// Cancel a subscription. Only the owner may cancel.
+    pub fn cancel_subscription(
+        env: Env,
+        owner: Address,
+        sub_id: u64,
+    ) -> Result<(), SubscriptionError> {
+        owner.require_auth();
+        let sub = storage::get_subscription(&env, sub_id).ok_or(SubscriptionError::NotFound)?;
+        if sub.owner != owner {
+            return Err(SubscriptionError::NotFound);
+        }
+        storage::remove_subscription(&env, sub_id);
+        // Remove from owner index.
+        let ids = storage::get_owner_subscription_ids(&env, &owner);
+        let mut updated: Vec<u64> = Vec::new(&env);
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            if id != sub_id {
+                updated.push_back(id);
+            }
+        }
+        storage::set_owner_subscription_ids(&env, &owner, &updated);
+        Ok(())
+    }
+
+    /// Read-only: list active (non-expired) subscription IDs for an owner.
+    pub fn list_subscriptions(env: Env, owner: Address) -> Vec<u64> {
+        let now = env.ledger().sequence();
+        let ids = storage::get_owner_subscription_ids(&env, &owner);
+        let mut active: Vec<u64> = Vec::new(&env);
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            if let Some(sub) = storage::get_subscription(&env, id) {
+                if sub.expires_at >= now {
+                    active.push_back(id);
+                }
+            }
+        }
+        active
+    }
+
     // ── Policy domain ────────────────────────────────────────────────────
 
     /// Turn an accepted quote into an enforceable on-chain policy.
@@ -710,6 +910,8 @@ impl NiffyInsure {
         age_band: types::AgeBand,
         coverage_type: types::CoverageType,
         safety_score: u32,
+        new_coverage_tier: Option<types::CoverageType>,
+        new_coverage_amount: Option<i128>,
     ) -> Result<types::RenewPolicyOutcome, policy::PolicyError> {
         policy::renew_policy(
             &env,
@@ -718,6 +920,8 @@ impl NiffyInsure {
             age_band,
             coverage_type,
             safety_score,
+            new_coverage_tier,
+            new_coverage_amount,
         )
     }
 
