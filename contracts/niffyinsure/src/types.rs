@@ -1,4 +1,4 @@
-use soroban_sdk::{contractevent, contracttype, Address, Bytes, BytesN, Map, String, Vec};
+use soroban_sdk::{contractevent, contracttype, Address, Bytes, BytesN, Env, Map, String, Vec};
 
 // ── Field size limits ─────────────────────────────────────────────────────────
 pub const DETAILS_MAX_LEN: u32 = 256;
@@ -214,9 +214,9 @@ impl ClaimStatus {
                 | ClaimStatus::AppealRejected
                 | ClaimStatus::Withdrawn
                 | ClaimStatus::Disputed // NOTE: ClaimStatus::Appealed is intentionally absent — an appeal
-                                         // in progress is NOT terminal.  Adding it here would allow
-                                         // process_claim / finalize_claim to close an appealed claim without
-                                         // resolving the appeal round, which would be incorrect.
+                                        // in progress is NOT terminal.  Adding it here would allow
+                                        // process_claim / finalize_claim to close an appealed claim without
+                                        // resolving the appeal round, which would be incorrect.
         )
     }
 }
@@ -432,6 +432,20 @@ pub struct InitiatePolicyOptions {
     pub expected_nonce: Option<u64>,
     /// Off-chain URI to the policy governing document. Must be non-empty.
     pub metadata_uri: String,
+    /// Optional region code validated against the admin-managed region registry.
+    pub region_code: Option<String>,
+}
+
+impl InitiatePolicyOptions {
+    pub fn test_defaults(env: &Env) -> Self {
+        Self {
+            beneficiary: None,
+            deductible: None,
+            expected_nonce: None,
+            metadata_uri: String::from_str(env, "ipfs://test-policy"),
+            region_code: None,
+        }
+    }
 }
 
 #[contracttype]

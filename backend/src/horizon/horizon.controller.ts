@@ -63,7 +63,7 @@ export class HorizonController {
       return await this.horizonService.getTransactions(account, cursor, limit);
     } catch (err) {
       if (err instanceof ServiceUnavailableException) {
-        const retryAfter = (err as any).retryAfter;
+        const retryAfter = (err as ServiceUnavailableException & { retryAfter?: number }).retryAfter;
         if (retryAfter) {
           res?.setHeader("Retry-After", String(retryAfter));
         }

@@ -14,41 +14,34 @@ import {
   HttpCode,
   HttpStatus,
   NotFoundException,
-  ForbiddenException,
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsOptional, IsString } from 'class-validator';
 import { Request, Response } from 'express';
-import { ClaimStatus, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminRoleGuard } from './guards/admin-role.guard';
 import { AdminService } from './admin.service';
 import { AdminPoliciesService } from './admin-policies.service';
 import { AuditService } from './audit.service';
-import { AdminStatsService } from './admin-stats.service';
 import { ReindexDto } from './dto/reindex.dto';
 import { BackfillDto } from './dto/backfill.dto';
 import { AuditQueryDto } from './dto/audit-query.dto';
 import { FeatureFlagDto } from './dto/feature-flag.dto';
 import { SetRateLimitDto, EnableOverrideDto } from './dto/rate-limit.dto';
-import { BulkUpdateClaimsDto, BULK_UPDATE_MAX_BATCH } from './dto/bulk-update-claims.dto';
 import { PrivacyService, PrivacyRequestType } from '../maintenance/privacy.service';
 import { RateLimitService } from '../rate-limit/rate-limit.service';
 import { QueueMonitorService } from '../queues/queue-monitor.service';
 import { SolvencyMonitoringService } from '../maintenance/solvency-monitoring.service';
-import { AdminTenantsService, CreateTenantDto, UpdateTenantDto } from './admin-tenants.service';
+import { AdminTenantsService } from './admin-tenants.service';
+import { AdminStatsService } from './admin-stats.service';
 
 class PrivacyRequestDto {
   @IsString() subjectWalletAddress!: string;
   @IsEnum(['ANONYMIZE', 'DELETE']) requestType!: PrivacyRequestType;
   @IsOptional() @IsString() notes?: string;
-}
-
-class ClaimStatusOverrideDto {
-  @IsEnum(ClaimStatus) newStatus!: ClaimStatus;
-  @IsString() @IsNotEmpty() reason!: string;
 }
 
 type AdminRequest = Request & {
@@ -82,6 +75,7 @@ export class AdminController {
     private readonly configService: ConfigService,
     private readonly solvencyMonitoringService: SolvencyMonitoringService,
     private readonly tenantsService: AdminTenantsService,
+    private readonly adminStatsService: AdminStatsService,
   ) {}
 
   /**
@@ -122,22 +116,6 @@ export class AdminController {
       ipAddress: req.ip,
     });
     return { jobId, fromLedger: dto.fromLedger, network, status: 'queued' };
-  }
-
-  /**
-   * GET /admin/reindex/status
-   *
-   * Returns the latest reindex progress for a network, including percentage complete.
-   */
-  @Get('reindex/status')
-  @ApiOperation({ summary: 'Get latest reindex progress for a network' })
-  async getReindexStatus(@Query('network') networkParam?: string) {
-    const network = networkParam ?? this.configService.get<string>('STELLAR_NETWORK', 'testnet');
-    const status = await this.adminService.getReindexStatus(network);
-    if (!status) {
-      throw new NotFoundException(`No reindex progress found for network ${network}`);
-    }
-    return status;
   }
 
   /**
@@ -291,65 +269,6 @@ export class AdminController {
       ipAddress: req.ip,
     });
     return result;
-  }
-
-  /**
-   * POST /admin/claims/:id/override
-   *
-   * Force a non-terminal claim to a new off-chain status. Requires elevated
-   * admin scope and writes the immutable audit row before mutating the claim.
-   */
-  @Post('claims/:id/override')
-  @ApiOperation({ summary: 'Force a claim status transition with elevated admin scope' })
-  async overrideClaimStatus(
-    @Param('id') idParam: string,
-    @Body() dto: ClaimStatusOverrideDto,
-    @Req() req: AdminRequest,
-  ) {
-    this.requireElevatedScope(req);
-    const claimId = Number(idParam);
-    if (!Number.isInteger(claimId) || claimId < 0) {
-      throw new BadRequestException('id must be a non-negative integer');
-    }
-    const reason = dto.reason.trim();
-    if (!reason) {
-      throw new BadRequestException('reason must be non-empty');
-    }
-
-    const actor =
-      req.adminIdentity?.email ??
-      req.adminIdentity?.staffId ??
-      req.user?.walletAddress ??
-      'unknown';
-    const before = await this.adminService.getClaimForOverride(claimId);
-    await this.auditService.write({
-      actor,
-      action: 'claim_status_override',
-      payload: {
-        claimId,
-        oldStatus: before.status,
-        newStatus: dto.newStatus,
-        reason,
-        requestBody: dto,
-      },
-      ipAddress: req.ip,
-    });
-
-    const updated = await this.adminService.overrideClaimStatus(claimId, dto.newStatus);
-    this.sorobanService
-      .tryEmitClaimStatusOverrideEvent({
-        claimId,
-        oldStatus: before.status,
-        newStatus: dto.newStatus,
-        reason,
-        actor,
-      })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.logger.warn(`Soroban claim override event emission failed for ${claimId}: ${msg}`);
-      });
-
-    return { claimId, oldStatus: before.status, newStatus: updated.status, status: 'updated' };
   }
 
   /**

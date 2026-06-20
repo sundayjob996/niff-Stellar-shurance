@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, BytesN, Env, String, Vec};
+use soroban_sdk::{contracterror, Bytes, BytesN, Env, String, Vec};
 
 use crate::types::{
     Claim, ClaimEvidenceEntry, MultiplierTable, Policy, RiskInput, DETAILS_MAX_LEN,
@@ -115,6 +115,41 @@ pub enum Error {
     ProtocolFeeOutOfBounds = 71,
     /// Minimum solvency ratio basis points outside documented bounds.
     SolvencyRatioOutOfBounds = 72,
+    /// External premium calculator returned an incompatible config version.
+    CalculatorVersionMismatch = 73,
+    /// Commit-reveal voting phases are not configured for this claim.
+    CommitRevealNotSet = 74,
+    /// Commit phase has ended; new vote commitments are rejected.
+    CommitPhaseEnded = 75,
+    /// Reveal phase has not started yet.
+    RevealPhaseNotOpen = 76,
+    /// Reveal phase has ended; late reveals are rejected.
+    RevealPhaseEnded = 77,
+    /// No commitment found for this voter on the claim.
+    CommitmentNotFound = 78,
+    /// Revealed vote does not match the prior commitment hash.
+    CommitmentMismatch = 79,
+}
+
+pub fn check_claim_evidence_update(
+    env: &Env,
+    evidence: &Vec<ClaimEvidenceEntry>,
+) -> Result<(), Error> {
+    let max_evidence = crate::storage::get_max_evidence_count(env);
+    if evidence.len() > max_evidence {
+        return Err(Error::EvidenceCountOutOfBounds);
+    }
+    let min_evidence = crate::storage::get_min_evidence_count(env);
+    if evidence.len() < min_evidence {
+        return Err(Error::InsufficientEvidence);
+    }
+    for entry in evidence.iter() {
+        if entry.url.len() > IMAGE_URL_MAX_LEN {
+            return Err(Error::ImageUrlTooLong);
+        }
+        validate_evidence_url(env, &entry.url)?;
+    }
+    Ok(())
 }
 
 pub fn validate_quorum_bps(bps: u32) -> Result<(), Error> {
@@ -474,29 +509,45 @@ pub fn check_multiplier_table_shape(table: &MultiplierTable) -> Result<(), Error
 
 /// Validate evidence URL format: must be `ipfs://` or match an allowlisted gateway prefix.
 pub fn validate_evidence_url(env: &Env, url: &String) -> Result<(), Error> {
-    let url_str = url.to_xdr(env);
-    
-    // Check for ipfs:// prefix
-    if url_str.len() >= 7 {
-        let prefix = &url_str[..7];
-        if prefix == b"ipfs://" {
+    let url_bytes = url.to_bytes();
+
+    if bytes_has_prefix(&url_bytes, b"ipfs://") {
+        return Ok(());
+    }
+
+    let gateways = crate::storage::get_gateway_allowlist(env);
+    for gateway in gateways.iter() {
+        let gateway_bytes = gateway.to_bytes();
+        if bytes_has_prefix_bytes(&url_bytes, &gateway_bytes) {
             return Ok(());
         }
     }
-    
-    // Check against allowlisted gateway prefixes
-    let gateways = crate::storage::get_gateway_allowlist(env);
-    for gateway in gateways.iter() {
-        let gateway_str = gateway.to_xdr(env);
-        if url_str.len() >= gateway_str.len() {
-            let url_prefix = &url_str[..gateway_str.len()];
-            if url_prefix == gateway_str.as_slice() {
-                return Ok(());
-            }
+
+    Err(Error::InvalidEvidenceUrl)
+}
+
+fn bytes_has_prefix(haystack: &Bytes, prefix: &[u8]) -> bool {
+    if haystack.len() < prefix.len() as u32 {
+        return false;
+    }
+    for (i, byte) in prefix.iter().enumerate() {
+        if haystack.get(i as u32).unwrap_or(0) != *byte {
+            return false;
         }
     }
-    
-    Err(Error::InvalidEvidenceUrl)
+    true
+}
+
+fn bytes_has_prefix_bytes(haystack: &Bytes, prefix: &Bytes) -> bool {
+    if haystack.len() < prefix.len() {
+        return false;
+    }
+    for i in 0..prefix.len() {
+        if haystack.get(i).unwrap_or(0) != prefix.get(i).unwrap_or(0) {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -508,7 +559,10 @@ mod evidence_url_validation_tests {
     fn ipfs_prefix_is_valid() {
         let env = Env::default();
         let contract_id = env.register(crate::NiffyInsure, ());
-        let url = String::from_str(&env, "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi");
+        let url = String::from_str(
+            &env,
+            "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        );
         env.as_contract(&contract_id, || {
             assert!(validate_evidence_url(&env, &url).is_ok());
         });
@@ -574,4 +628,3 @@ mod evidence_url_validation_tests {
         });
     }
 }
-

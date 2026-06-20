@@ -5,7 +5,7 @@ use crate::{
     types::{ClaimStatus, Policy, PolicyType, RegionTier, TerminationReason},
     validate,
 };
-use soroban_sdk::{contracterror, contractevent, Address, Env};
+use soroban_sdk::{contracterror, contractevent, Address, Env, String};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -75,6 +75,7 @@ pub fn initiate_policy(
         termination_reason: TerminationReason::None,
         terminated_by_admin: false,
         strike_count: 0,
+        metadata_uri: String::from_str(env, ""),
     };
 
     validate::check_policy(&policy).map_err(|e| match e {
@@ -218,10 +219,8 @@ fn terminate_inner(
 
     // Block termination if any claim on this policy is in Processing status.
     // This prevents holders from terminating to avoid a pending claim decision.
-    if !by_admin || !allow_open_claim_bypass {
-        if has_processing_claim(env, holder, policy_id) {
-            return Err(PolicyError::OpenClaimInProcessing);
-        }
+    if (!by_admin || !allow_open_claim_bypass) && has_processing_claim(env, holder, policy_id) {
+        return Err(PolicyError::OpenClaimInProcessing);
     }
 
     let now = env.ledger().sequence();

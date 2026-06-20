@@ -72,9 +72,8 @@ fn approve_claim_flow(
         &1_000_000,
         token,
         &niffyinsure::types::InitiatePolicyOptions {
-            beneficiary: None,
             deductible: deductible,
-            expected_nonce: None,
+            ..niffyinsure::types::InitiatePolicyOptions::test_defaults(env)
         },
     );
 
@@ -141,9 +140,8 @@ fn initiate_rejects_deductible_above_coverage() {
         &100_000,
         &token,
         &niffyinsure::types::InitiatePolicyOptions {
-            beneficiary: None,
             deductible: Some(100_001i128),
-            expected_nonce: None,
+            ..niffyinsure::types::InitiatePolicyOptions::test_defaults(&env)
         },
     );
     assert!(matches!(r, Err(Ok(PolicyError::InvalidDeductible))));

@@ -10,7 +10,7 @@
 /// Production deployments SHOULD use a Stellar multisig account as admin.
 /// See SECURITY.md for the full threat matrix and multisig setup guidance.
 use soroban_sdk::{
-    contracterror, contractevent, contracttype, panic_with_error, Address, Env, Map, String,
+    contracterror, contractevent, contracttype, panic_with_error, Address, Env, Map, String, Vec,
 };
 
 use crate::storage;
@@ -712,11 +712,7 @@ pub fn set_max_weight_cap(env: &Env, new_cap: i128) -> Result<(), AdminError> {
     }
     let old_cap = storage::get_max_weight_cap(env);
     storage::set_max_weight_cap(env, new_cap);
-    MaxWeightCapUpdated {
-        old_cap,
-        new_cap,
-    }
-    .publish(env);
+    MaxWeightCapUpdated { old_cap, new_cap }.publish(env);
     Ok(())
 }
 

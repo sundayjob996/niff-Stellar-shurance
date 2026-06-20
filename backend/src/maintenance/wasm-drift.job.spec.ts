@@ -31,7 +31,7 @@ describe('WasmDriftJob', () => {
       providers: [
         WasmDriftJob,
         { provide: WasmDriftService, useValue: mockDriftService },
-        { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue(undefined) } },
+        { provide: ConfigService, useValue: { get: jest.fn((_k: string, d?: unknown) => d) } },
       ],
     }).compile();
 

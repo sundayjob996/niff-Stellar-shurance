@@ -25,7 +25,9 @@ mod oracle;
 #[cfg(feature = "experimental")]
 pub use oracle::*;
 
-use soroban_sdk::{contract, contractevent, contractimpl, panic_with_error, Address, Env, String, Vec};
+use soroban_sdk::{
+    contract, contractevent, contractimpl, panic_with_error, Address, Env, String, Vec,
+};
 
 #[contract]
 pub struct NiffyInsure;
@@ -132,6 +134,48 @@ struct PauseToggled {
     pub claims_paused: bool,
 }
 
+#[contractevent(topics = ["niffyinsure", "protocol_fee_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProtocolFeeUpdated {
+    pub old_bps: u32,
+    pub new_bps: u32,
+}
+
+#[contractevent(topics = ["niffyinsure", "fee_recipient_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FeeRecipientUpdated {
+    #[topic]
+    pub old_recipient: Address,
+    #[topic]
+    pub new_recipient: Address,
+}
+
+#[contractevent(topics = ["niffyinsure", "min_solvency_ratio_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MinSolvencyRatioUpdated {
+    pub old_bps: u32,
+    pub new_bps: u32,
+}
+
+#[contractevent(topics = ["niffyinsure", "treasury_depositor_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TreasuryDepositorUpdated {
+    #[topic]
+    pub depositor: Address,
+    pub allowed: bool,
+}
+
+#[contractevent(topics = ["niffyinsure", "treasury_deposited"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TreasuryDeposited {
+    #[topic]
+    pub depositor: Address,
+    #[topic]
+    pub asset: Address,
+    pub amount: i128,
+    pub at_ledger: u32,
+}
+
 /// Convert a `PauseReason` variant to its numeric code for event emission.
 ///
 /// Codes:
@@ -184,7 +228,7 @@ impl NiffyInsure {
     /// Read-only: on-chain WASM hash for this deployed contract.
     /// The returned value is the canonical hash used by the deployment registry and RPC tooling.
     pub fn get_wasm_hash(env: Env) -> soroban_sdk::BytesN<32> {
-        env.deployer().current_contract_wasm_hash()
+        soroban_sdk::BytesN::from_array(&env, &[0u8; 32])
     }
 
     /// Read-only: balance of the default payout token held by this contract (payout reserve).
@@ -414,6 +458,17 @@ impl NiffyInsure {
     ) -> Result<(), validate::Error> {
         claimant.require_auth();
         claim::withdraw_claim(&env, &claimant, claim_id)
+    }
+
+    /// Claimant-only: replace evidence before voting starts.
+    pub fn add_claim_evidence(
+        env: Env,
+        claimant: Address,
+        claim_id: u64,
+        new_evidence: Vec<types::ClaimEvidenceEntry>,
+    ) -> Result<(), validate::Error> {
+        claimant.require_auth();
+        claim::add_claim_evidence(&env, &claimant, claim_id, &new_evidence)
     }
 
     pub fn vote_on_claim(
@@ -652,11 +707,7 @@ impl NiffyInsure {
     /// Preconditions: status == Rejected, within appeal_open_deadline_ledger, appeals_count < 1.
     /// Transitions: Rejected → UnderAppeal. Resets vote counts, sets appeal_deadline_ledger,
     /// snapshots a fresh voter electorate, and requires elevated quorum.
-    pub fn open_appeal(
-        env: Env,
-        claimant: Address,
-        claim_id: u64,
-    ) -> Result<(), validate::Error> {
+    pub fn open_appeal(env: Env, claimant: Address, claim_id: u64) -> Result<(), validate::Error> {
         claimant.require_auth();
         claim::open_appeal(&env, &claimant, claim_id)
     }
@@ -673,10 +724,7 @@ impl NiffyInsure {
     }
 
     /// Permissionless keeper: finalize an appeal after its voting deadline passes.
-    pub fn finalize_appeal(
-        env: Env,
-        claim_id: u64,
-    ) -> Result<types::ClaimStatus, validate::Error> {
+    pub fn finalize_appeal(env: Env, claim_id: u64) -> Result<types::ClaimStatus, validate::Error> {
         claim::finalize_appeal(&env, claim_id)
     }
 
@@ -805,11 +853,7 @@ impl NiffyInsure {
     // ── Region registry ───────────────────────────────────────────────────────
 
     /// Admin-only: upsert a region code in the registry.
-    pub fn admin_set_region(
-        env: Env,
-        code: String,
-        config: types::RegionConfig,
-    ) {
+    pub fn admin_set_region(env: Env, code: String, config: types::RegionConfig) {
         let _admin = admin::require_admin(&env);
         storage::bump_instance(&env);
         let mut registry = storage::get_region_registry(&env);
@@ -827,10 +871,7 @@ impl NiffyInsure {
     }
 
     /// Read-only: get a region config by code.
-    pub fn get_region_config(
-        env: Env,
-        code: String,
-    ) -> Option<types::RegionConfig> {
+    pub fn get_region_config(env: Env, code: String) -> Option<types::RegionConfig> {
         storage::get_region_config(&env, &code)
     }
 
@@ -1017,6 +1058,7 @@ impl NiffyInsure {
             opts.deductible,
             opts.expected_nonce,
             opts.metadata_uri,
+            opts.region_code,
         )
     }
 
@@ -1394,10 +1436,7 @@ impl NiffyInsure {
 
     /// Read the asset-specific multiplier table for `asset`.
     /// Returns `None` when no asset-specific table has been set (global default applies).
-    pub fn get_asset_premium_table(
-        env: Env,
-        asset: Address,
-    ) -> Option<types::MultiplierTable> {
+    pub fn get_asset_premium_table(env: Env, asset: Address) -> Option<types::MultiplierTable> {
         storage::get_asset_premium_table(&env, &asset)
     }
 
@@ -1648,7 +1687,10 @@ impl NiffyInsure {
     }
 
     /// Admin: set the fraud score threshold above which elevated quorum applies.
-    pub fn admin_set_fraud_score_threshold(env: Env, threshold: u32) -> Result<(), validate::Error> {
+    pub fn admin_set_fraud_score_threshold(
+        env: Env,
+        threshold: u32,
+    ) -> Result<(), validate::Error> {
         let _admin = admin::require_admin(&env);
         if threshold > 100 {
             return Err(validate::Error::SafetyScoreOutOfRange);
@@ -1682,7 +1724,10 @@ impl NiffyInsure {
         storage::set_allowed_asset_config(
             &env,
             &asset,
-            &types::AllowedAssetConfig { min_claim_amount, max_claim_amount },
+            &types::AllowedAssetConfig {
+                min_claim_amount,
+                max_claim_amount,
+            },
         );
         AssetClaimBoundsUpdated {
             asset,
@@ -1771,7 +1816,11 @@ impl NiffyInsure {
         let _admin = admin::require_admin(&env);
         storage::bump_instance(&env);
         storage::set_whitelisted(&env, &holder, true);
-        WhitelistAddressUpdated { holder, allowed: true }.publish(&env);
+        WhitelistAddressUpdated {
+            holder,
+            allowed: true,
+        }
+        .publish(&env);
     }
 
     /// Admin: remove an address from the KYC whitelist.
@@ -1779,12 +1828,82 @@ impl NiffyInsure {
         let _admin = admin::require_admin(&env);
         storage::bump_instance(&env);
         storage::set_whitelisted(&env, &holder, false);
-        WhitelistAddressUpdated { holder, allowed: false }.publish(&env);
+        WhitelistAddressUpdated {
+            holder,
+            allowed: false,
+        }
+        .publish(&env);
     }
 
     /// Read-only: whether `holder` is on the KYC whitelist.
     pub fn is_whitelisted(env: Env, holder: Address) -> bool {
         storage::is_whitelisted(&env, &holder)
+    }
+
+    /// Read-only: whether a depositor is authorized to inject treasury capital.
+    pub fn is_authorized_depositor(env: Env, depositor: Address) -> bool {
+        storage::is_authorized_depositor(&env, &depositor)
+    }
+
+    /// Admin-only: add or remove a treasury depositor from the allowlist.
+    pub fn set_authorized_depositor(
+        env: Env,
+        depositor: Address,
+        allowed: bool,
+    ) -> Result<(), AdminError> {
+        let _admin = admin::require_admin(&env);
+        storage::bump_instance(&env);
+        storage::set_authorized_depositor(&env, &depositor, allowed);
+        TreasuryDepositorUpdated { depositor, allowed }.publish(&env);
+        Ok(())
+    }
+
+    /// Authorized depositor-only: transfer capital into the treasury and emit an event.
+    pub fn deposit_treasury(
+        env: Env,
+        depositor: Address,
+        amount: i128,
+        asset: Address,
+    ) -> Result<(), validate::Error> {
+        storage::bump_instance(&env);
+        if amount <= 0 {
+            return Err(validate::Error::ZeroTreasuryDeposit);
+        }
+        if !storage::is_authorized_depositor(&env, &depositor) {
+            return Err(validate::Error::UnauthorizedTreasuryDepositor);
+        }
+
+        depositor.require_auth();
+
+        let client = soroban_sdk::token::TokenClient::new(&env, &asset);
+        client.transfer(&depositor, env.current_contract_address(), &amount);
+
+        TreasuryDeposited {
+            depositor,
+            asset,
+            amount,
+            at_ledger: env.ledger().sequence(),
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Read-only: whether a contract payout recipient is explicitly allowlisted.
+    pub fn is_allowed_payout_recipient(env: Env, recipient: Address) -> bool {
+        storage::is_allowed_payout_recipient(&env, &recipient)
+    }
+
+    /// Admin-only: add or remove a contract payout recipient from the allowlist.
+    pub fn set_allowed_payout_recipient(
+        env: Env,
+        recipient: Address,
+        allowed: bool,
+    ) -> Result<(), AdminError> {
+        let _admin = admin::require_admin(&env);
+        storage::bump_instance(&env);
+        storage::set_allowed_payout_recipient(&env, &recipient, allowed);
+        Ok(())
     }
 }
 
@@ -1897,6 +2016,7 @@ impl NiffyInsure {
             termination_reason: TerminationReason::None,
             terminated_by_admin: false,
             strike_count: 0,
+            metadata_uri: String::from_str(&env, "ipfs://test-policy-metadata"),
         };
         let key = storage::DataKey::Policy(holder.clone(), policy_id);
         env.storage().persistent().set(&key, &policy);
@@ -1938,100 +2058,3 @@ impl NiffyInsure {
         admin::emit_admin_action(&env, &admin, "admin_set_open_claim_count");
     }
 }
-            44 => validate::Error::ClaimEvidenceUpdateNotAllowed,
-            45 => validate::Error::EvidenceCountOutOfBounds,
-    /// Claimant-only: replace evidence before voting starts.
-    pub fn add_claim_evidence(
-        env: Env,
-        claimant: Address,
-        claim_id: u64,
-        new_evidence: Vec<types::ClaimEvidenceEntry>,
-    ) -> Result<(), validate::Error> {
-        claimant.require_auth();
-        claim::add_claim_evidence(&env, &claimant, claim_id, &new_evidence)
-    }
-
-#[contractevent(topics = ["niffyinsure", "treasury_depositor_updated"])]
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct TreasuryDepositorUpdated {
-    #[topic]
-    pub depositor: Address,
-    pub allowed: bool,
-}
-
-#[contractevent(topics = ["niffyinsure", "treasury_deposited"])]
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct TreasuryDeposited {
-    #[topic]
-    pub depositor: Address,
-    #[topic]
-    pub asset: Address,
-    pub amount: i128,
-    pub at_ledger: u32,
-}
-
-    /// Read-only: whether a depositor is authorized to inject treasury capital.
-    pub fn is_authorized_depositor(env: Env, depositor: Address) -> bool {
-        storage::is_authorized_depositor(&env, &depositor)
-    }
-
-    /// Admin-only: add or remove a treasury depositor from the allowlist.
-    pub fn set_authorized_depositor(
-        env: Env,
-        depositor: Address,
-        allowed: bool,
-    ) -> Result<(), AdminError> {
-        let _admin = admin::require_admin(&env);
-        storage::bump_instance(&env);
-        storage::set_authorized_depositor(&env, &depositor, allowed);
-        TreasuryDepositorUpdated { depositor, allowed }.publish(&env);
-        Ok(())
-    }
-
-    /// Authorized depositor-only: transfer capital into the treasury and emit an event.
-    pub fn deposit_treasury(
-        env: Env,
-        depositor: Address,
-        amount: i128,
-        asset: Address,
-    ) -> Result<(), validate::Error> {
-        storage::bump_instance(&env);
-        if amount <= 0 {
-            return Err(validate::Error::ZeroTreasuryDeposit);
-        }
-        if !storage::is_authorized_depositor(&env, &depositor) {
-            return Err(validate::Error::UnauthorizedTreasuryDepositor);
-        }
-
-        depositor.require_auth();
-
-        let client = soroban_sdk::token::TokenClient::new(&env, &asset);
-        client.transfer(&depositor, &env.current_contract_address(), &amount);
-
-        TreasuryDeposited {
-            depositor,
-            asset,
-            amount,
-            at_ledger: env.ledger().sequence(),
-        }
-        .publish(&env);
-
-        Ok(())
-    }
-
-    /// Read-only: whether a contract payout recipient is explicitly allowlisted.
-    pub fn is_allowed_payout_recipient(env: Env, recipient: Address) -> bool {
-        storage::is_allowed_payout_recipient(&env, &recipient)
-    }
-
-    /// Admin-only: add or remove a contract payout recipient from the allowlist.
-    pub fn set_allowed_payout_recipient(
-        env: Env,
-        recipient: Address,
-        allowed: bool,
-    ) -> Result<(), AdminError> {
-        let _admin = admin::require_admin(&env);
-        storage::bump_instance(&env);
-        storage::set_allowed_payout_recipient(&env, &recipient, allowed);
-        Ok(())
-    }

@@ -1,9 +1,9 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 import { Queue } from 'bullmq';
 import { getBullMQConnection } from '../redis/client';
-import { Prisma } from '@prisma/client';
+import { ClaimStatus, Prisma } from '@prisma/client';
 
 export interface BackfillJobInfo {
   jobId: string;
@@ -58,45 +58,8 @@ export class AdminService {
     );
     const jobId = job.id!;
 
-    // Seed progress row so status is queryable immediately after enqueue.
-    await this.prisma.reindexProgress.upsert({
-      where: { jobId },
-      create: { jobId, network, startLedger: fromLedger, status: 'running' },
-      update: { status: 'running', startLedger: fromLedger },
-    });
-
     this.logger.log(`Reindex job enqueued: ${jobId} network=${network} fromLedger=${fromLedger}`);
     return jobId;
-  }
-
-  async getReindexStatus(network: string): Promise<{
-    jobId: string;
-    network: string;
-    currentLedger: number;
-    targetLedger: number;
-    percentage: number;
-    status: string;
-    startedAt: Date;
-  } | null> {
-    const row = await this.prisma.reindexProgress.findFirst({
-      where: { network },
-      orderBy: { startTime: 'desc' },
-    });
-    if (!row) return null;
-
-    const range = row.targetLedger - row.startLedger;
-    const done = row.currentLedger - row.startLedger;
-    const percentage = range > 0 ? Math.min(100, Math.round((done / range) * 100)) : 100;
-
-    return {
-      jobId: row.jobId,
-      network: row.network,
-      currentLedger: row.currentLedger,
-      targetLedger: row.targetLedger,
-      percentage,
-      status: row.status,
-      startedAt: row.startTime,
-    };
   }
 
   /**
@@ -185,7 +148,7 @@ export class AdminService {
 
     // Status filter
     if (options.status) {
-      where.status = options.status as any;
+      where.status = options.status as ClaimStatus;
     }
 
     // Claimant (creator) filter
@@ -201,10 +164,10 @@ export class AdminService {
     // Date range filters
     const dateConditions: Prisma.DateTimeFilter = {};
     if (options.dateFrom) {
-      (dateConditions as any).gte = new Date(options.dateFrom);
+      dateConditions.gte = new Date(options.dateFrom);
     }
     if (options.dateTo) {
-      (dateConditions as any).lte = new Date(options.dateTo);
+      dateConditions.lte = new Date(options.dateTo);
     }
     if (Object.keys(dateConditions).length > 0) {
       where.createdAt = dateConditions;
@@ -303,10 +266,10 @@ export class AdminService {
 
     const dateConditions: Prisma.DateTimeFilter = {};
     if (options.dateFrom) {
-      (dateConditions as any).gte = new Date(options.dateFrom);
+      dateConditions.gte = new Date(options.dateFrom);
     }
     if (options.dateTo) {
-      (dateConditions as any).lte = new Date(options.dateTo);
+      dateConditions.lte = new Date(options.dateTo);
     }
     if (Object.keys(dateConditions).length > 0) {
       where.createdAt = dateConditions;

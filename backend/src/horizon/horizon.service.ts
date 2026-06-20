@@ -21,6 +21,9 @@ const RL_MAX_REQUESTS = 30;
 const HORIZON_CIRCUIT_BREAKER_THRESHOLD = 5;
 const HORIZON_CIRCUIT_BREAKER_RESET_MS = 60_000;
 
+type HttpStatusError = Error & { statusCode?: number };
+type ServiceErrorWithRetryAfter = ServiceUnavailableException & { retryAfter?: number };
+
 /**
  * Stellar address format: 56 uppercase alphanumeric characters starting with G.
  */
@@ -210,7 +213,7 @@ export class HorizonService {
       if (this.circuitBreaker.opened) {
         const retryAfterSeconds = Math.ceil(this.circuitBreakerResetMs / 1000);
         const error = new ServiceUnavailableException("Horizon is temporarily unavailable");
-        (error as any).retryAfter = retryAfterSeconds;
+        (error as ServiceErrorWithRetryAfter).retryAfter = retryAfterSeconds;
         throw error;
       }
 
@@ -230,17 +233,17 @@ export class HorizonService {
       });
 
       if (!res.ok) {
-        const error = new Error(`Horizon returned HTTP ${res.status}`);
-        (error as any).statusCode = res.status;
+        const error = new Error(`Horizon returned HTTP ${res.status}`) as HttpStatusError;
+        error.statusCode = res.status;
         throw error;
       }
 
       return (await res.json()) as Record<string, unknown>;
     } catch (err) {
-      const statusCode = (err as any).statusCode;
+      const statusCode = (err as HttpStatusError).statusCode;
       if (statusCode === 429) {
-        const error = new Error("Too Many Requests from Horizon");
-        (error as any).statusCode = 429;
+        const error = new Error("Too Many Requests from Horizon") as HttpStatusError;
+        error.statusCode = 429;
         throw error;
       }
       throw err;

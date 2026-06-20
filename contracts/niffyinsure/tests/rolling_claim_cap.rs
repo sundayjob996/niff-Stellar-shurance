@@ -103,11 +103,7 @@ fn single_claim_at_cap_succeeds() {
         &80,
         &500_000i128,
         &token,
-        &niffyinsure::types::InitiatePolicyOptions {
-            beneficiary: None,
-            deductible: None,
-            expected_nonce: None,
-        },
+        &niffyinsure::types::InitiatePolicyOptions::test_defaults(&env),
     );
 
     let details = String::from_str(&env, "at cap");
@@ -147,11 +143,7 @@ fn two_claims_summing_to_cap_succeed() {
         &80,
         &500_000i128,
         &token,
-        &niffyinsure::types::InitiatePolicyOptions {
-            beneficiary: None,
-            deductible: None,
-            expected_nonce: None,
-        },
+        &niffyinsure::types::InitiatePolicyOptions::test_defaults(&env),
     );
 
     let details = String::from_str(&env, "first");
@@ -208,11 +200,7 @@ fn file_claim_over_cap_fails() {
         &80,
         &500_000i128,
         &token,
-        &niffyinsure::types::InitiatePolicyOptions {
-            beneficiary: None,
-            deductible: None,
-            expected_nonce: None,
-        },
+        &niffyinsure::types::InitiatePolicyOptions::test_defaults(&env),
     );
 
     let details = String::from_str(&env, "too big");
@@ -255,11 +243,7 @@ fn cap_lowered_after_file_does_not_block_payout() {
         &80,
         &500_000i128,
         &token,
-        &niffyinsure::types::InitiatePolicyOptions {
-            beneficiary: None,
-            deductible: None,
-            expected_nonce: None,
-        },
+        &niffyinsure::types::InitiatePolicyOptions::test_defaults(&env),
     );
 
     let details = String::from_str(&env, "in flight");
@@ -308,11 +292,7 @@ fn window_rollover_resets_cumulative() {
         &80,
         &500_000i128,
         &token,
-        &niffyinsure::types::InitiatePolicyOptions {
-            beneficiary: None,
-            deductible: None,
-            expected_nonce: None,
-        },
+        &niffyinsure::types::InitiatePolicyOptions::test_defaults(&env),
     );
 
     let details = String::from_str(&env, "w1");

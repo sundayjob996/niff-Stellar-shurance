@@ -72,7 +72,7 @@ use crate::{
         Claim, ClaimEvidenceEntry, ClaimProcessed, ClaimStatus, ClaimStatusHistoryEntry,
         TerminationReason, VoteOption, CLAIM_STATUS_HISTORY_MAX, STRIKE_DEACTIVATION_THRESHOLD,
     },
-    validate::Error,
+    validate::{self, Error},
 };
 use soroban_sdk::{contractevent, Address, BytesN, Env, String, Vec};
 
@@ -354,6 +354,8 @@ pub fn file_claim(
         appeal_reject_votes: 0,
         status_history,
         dispute_deadline_ledger: 0,
+        paid_amount: 0,
+        installment_count: 0,
     };
 
     storage::set_claim(env, &claim);
@@ -376,12 +378,7 @@ pub fn file_claim(
         evidence_hashes,
     }
     .publish(env);
-    events::emit_claim_status_changed(
-        env,
-        claim_id,
-        ClaimStatus::Pending,
-        ClaimStatus::Processing,
-    );
+    events::emit_claim_status_changed(env, claim_id, ClaimStatus::Pending, ClaimStatus::Processing);
 
     Ok(claim_id)
 }
@@ -493,7 +490,6 @@ pub fn vote_on_claim(
     storage::set_vote(env, claim_id, voter, vote);
 
     let status_before = claim.status.clone();
-    let vote_weight = storage::delegated_vote_weight(env, claim_id, voter, now)?;
 
     // Compute vote weight: proportional to active policy count when governance token
     // is enabled (capped by max_weight_cap), or 1 when disabled.
@@ -506,7 +502,9 @@ pub fn vote_on_claim(
     };
 
     match vote {
-        VoteOption::Approve => claim.approve_votes = claim.approve_votes.saturating_add(vote_weight),
+        VoteOption::Approve => {
+            claim.approve_votes = claim.approve_votes.saturating_add(vote_weight)
+        }
         VoteOption::Reject => claim.reject_votes = claim.reject_votes.saturating_add(vote_weight),
     }
 
@@ -623,7 +621,8 @@ fn finalize_claim_inner(env: &Env, claim_id: u64) -> Result<ClaimStatus, Error> 
         if claim.status == ClaimStatus::Approved && claim.payout_deadline_ledger == 0 {
             claim.payout_deadline_ledger = now.saturating_add(ledger::PAYOUT_TIMEOUT_LEDGERS);
             // Set dispute deadline after approval
-            claim.dispute_deadline_ledger = now.saturating_add(ledger::DEFAULT_DISPUTE_WINDOW_LEDGERS);
+            claim.dispute_deadline_ledger =
+                now.saturating_add(ledger::DEFAULT_DISPUTE_WINDOW_LEDGERS);
         }
         push_status_transition(&mut claim.status_history, claim.status.clone(), now);
         events::emit_claim_status_changed(
@@ -989,7 +988,7 @@ fn payout(env: &Env, claim: &Claim) -> Result<(), Error> {
         .clone()
         .unwrap_or_else(|| policy.holder.clone());
 
-    if payout_to.to_string().starts_with('C') {
+    if payout_to.executable().is_some() {
         if !storage::is_allowed_payout_recipient(env, &payout_to) {
             return Err(Error::PayoutRecipientContractNotAllowlisted);
         }
@@ -1026,8 +1025,8 @@ fn payout(env: &Env, claim: &Claim) -> Result<(), Error> {
         );
     } else {
         // Primary treasury insufficient — try reinsurance
-        let reinsurance = storage::get_reinsurance_contract(env)
-            .ok_or(Error::NoReinsuranceConfigured)?;
+        let reinsurance =
+            storage::get_reinsurance_contract(env).ok_or(Error::NoReinsuranceConfigured)?;
 
         let primary_amount = primary_balance.max(0);
         let reinsurance_amount = net.checked_sub(primary_amount).ok_or(Error::Overflow)?;
@@ -1087,7 +1086,7 @@ pub fn dispute_claim(env: &Env, claim_id: u64) -> Result<(), Error> {
         return Err(Error::PayoutDeadlineNotReached);
     }
 
-    let old_status = claim.status.clone();
+    let _old_status = claim.status.clone();
     claim.status = ClaimStatus::Disputed;
     push_status_transition(&mut claim.status_history, ClaimStatus::Disputed, now);
     storage::set_claim(env, &claim);
@@ -1146,8 +1145,7 @@ pub fn set_claim_fraud_score(
     let admin = storage::get_admin(env);
     if *caller != admin {
         // Check delegation
-        let delegation = storage::get_delegation(env, caller)
-            .ok_or(Error::DelegationInvalid)?;
+        let delegation = storage::get_delegation(env, caller).ok_or(Error::DelegationInvalid)?;
         let now = env.ledger().sequence();
         if now > delegation.expiry_ledger {
             return Err(Error::DelegationInvalid);
@@ -1426,7 +1424,10 @@ pub fn disburse_installment(env: &Env, claim_id: u64, amount: i128) -> Result<()
         amount,
     );
 
-    claim.paid_amount = claim.paid_amount.checked_add(amount).ok_or(Error::Overflow)?;
+    claim.paid_amount = claim
+        .paid_amount
+        .checked_add(amount)
+        .ok_or(Error::Overflow)?;
     claim.installment_count += 1;
 
     events::emit_installment_disbursed(
@@ -1775,7 +1776,12 @@ pub fn finalize_appeal(env: &Env, claim_id: u64) -> Result<ClaimStatus, Error> {
 ///
 /// Sets `status`, pushes history entry, closes the open-claim slot when terminal,
 /// sets `payout_deadline_ledger` on AppealApproved, and emits `AppealResolved`.
-fn finalize_appeal_outcome(env: &Env, claim: &mut crate::types::Claim, outcome: ClaimStatus, now: u32) {
+fn finalize_appeal_outcome(
+    env: &Env,
+    claim: &mut crate::types::Claim,
+    outcome: ClaimStatus,
+    now: u32,
+) {
     let old_status = claim.status.clone();
     claim.status = outcome.clone();
     push_status_transition(&mut claim.status_history, outcome.clone(), now);

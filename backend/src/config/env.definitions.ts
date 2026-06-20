@@ -636,6 +636,14 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     required: 'required',
     schema: frontendOriginsSchema,
   },
+  CORS_ALLOWED_ORIGINS: {
+    key: 'CORS_ALLOWED_ORIGINS',
+    section: 'HTTP',
+    description: 'Legacy alias for comma-separated public frontend CORS origins.',
+    example: 'http://localhost:3001',
+    required: 'optional',
+    schema: Joi.string().allow('').default(''),
+  },
   ADMIN_CORS_ORIGINS: {
     key: 'ADMIN_CORS_ORIGINS',
     section: 'HTTP',

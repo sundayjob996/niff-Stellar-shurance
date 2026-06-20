@@ -64,6 +64,7 @@ pub(crate) fn transfer(env: &Env, token: &Address, from: &Address, to: &Address,
 }
 
 /// Check if the contract treasury has enough balance of `asset` for a payout.
+#[allow(dead_code)]
 pub fn check_balance(env: &Env, asset: &Address, amount: i128) -> bool {
     let client = token::TokenClient::new(env, asset);
     client.balance(&env.current_contract_address()) >= amount
@@ -103,5 +104,10 @@ pub(crate) fn transfer_from_reinsurance(
         panic!("token not allowlisted");
     }
     let client = token::TokenClient::new(env, asset);
-    client.transfer_from(&env.current_contract_address(), reinsurance, recipient, &amount);
+    client.transfer_from(
+        &env.current_contract_address(),
+        reinsurance,
+        recipient,
+        &amount,
+    );
 }

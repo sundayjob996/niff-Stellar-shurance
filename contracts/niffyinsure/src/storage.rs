@@ -85,6 +85,8 @@ pub enum DataKey {
     Voters,
     ClaimCounter,
     Paused,
+    /// Active pause reason when the contract is paused.
+    PauseReason,
     /// New: pending high-risk admin action
     PendingAdminAction,
     /// Optional per-transaction cap for emergency sweep operations (i128).
@@ -127,6 +129,10 @@ pub enum DataKey {
     GovernanceTokenConfigVersion,
     /// Monotonic governance proposal id counter.
     ProposalCounter,
+    /// Governance proposal record keyed by proposal id.
+    Proposal(u64),
+    /// (proposal_id, voter) -> vote weight recorded for governance proposals.
+    ProposalVote(u64, Address),
     // ── Persistent tier ──────────────────────────────────────────────────
     Policy(Address, u32),
     PolicyCounter(Address),
@@ -202,6 +208,30 @@ pub enum DataKey {
     AppealVoters(u64),
     /// Per-claim quorum bps snapshot frozen at appeal-open time (immutable for that round).
     AppealClaimQuorumBps(u64),
+    // ── Issue #583: Claim fraud score ─────────────────────────────────────────
+    ClaimFraudScore(u64),
+    FraudScoreThreshold,
+    ElevatedQuorumBps,
+    // ── Issue #587: Asset-specific claim amount bounds ───────────────────────
+    AllowedAssetConfig(Address),
+    // ── Issue #585: Admin role delegation ────────────────────────────────────
+    Delegation(Address),
+    // ── Issue #581: Reinsurance pool ─────────────────────────────────────────
+    ReinsuranceContract,
+    // ── Treasury depositor allowlist ─────────────────────────────────────────
+    AuthorizedDepositor(Address),
+    // ── Contract payout recipient allowlist ──────────────────────────────────
+    AllowedPayoutRecipient(Address),
+    // ── Region registry ──────────────────────────────────────────────────────
+    RegionRegistry,
+    // ── Treatment tracking ───────────────────────────────────────────────────
+    TreatmentCount(u64),
+    // ── Vet specialization registry ──────────────────────────────────────────
+    VetSpecializations(Address),
+    // ── Event subscription filter system ───────────────────────────────────────
+    SubscriptionCounter,
+    Subscription(u64),
+    OwnerSubscriptionIds(Address),
 }
 pub fn has_open_claim(env: &Env, holder: &Address, policy_id: u32) -> bool {
     env.storage()
@@ -347,7 +377,9 @@ pub fn get_protocol_fee_bps(env: &Env) -> u32 {
 }
 
 pub fn set_fee_recipient(env: &Env, recipient: &Address) {
-    env.storage().instance().set(&DataKey::FeeRecipient, recipient);
+    env.storage()
+        .instance()
+        .set(&DataKey::FeeRecipient, recipient);
 }
 
 pub fn get_fee_recipient(env: &Env) -> Address {
@@ -631,7 +663,9 @@ pub fn set_proposal(env: &Env, proposal: &crate::governance::Proposal) {
 }
 
 pub fn get_proposal(env: &Env, proposal_id: u64) -> Option<crate::governance::Proposal> {
-    env.storage().persistent().get(&DataKey::Proposal(proposal_id))
+    env.storage()
+        .persistent()
+        .get(&DataKey::Proposal(proposal_id))
 }
 
 pub fn remove_proposal(env: &Env, proposal_id: u64) {
@@ -1072,9 +1106,7 @@ pub fn get_min_evidence_count(env: &Env) -> u32 {
 
 /// Set admin-configurable maximum vote weight cap for governance token voting.
 pub fn set_max_weight_cap(env: &Env, cap: i128) {
-    env.storage()
-        .instance()
-        .set(&DataKey::MaxWeightCap, &cap);
+    env.storage().instance().set(&DataKey::MaxWeightCap, &cap);
 }
 
 /// Current max weight cap. Falls back to `i128::MAX` (uncapped) when unset.
@@ -1091,11 +1123,9 @@ pub fn get_max_weight_cap(env: &Env) -> i128 {
 pub fn set_last_claim_resolved_ledger(env: &Env, holder: &Address, policy_id: u32, ledger: u32) {
     let key = DataKey::LastClaimResolvedLedger(holder.clone(), policy_id);
     env.storage().persistent().set(&key, &ledger);
-    env.storage().persistent().extend_ttl(
-        &key,
-        PERSISTENT_TTL_THRESHOLD,
-        PERSISTENT_TTL_EXTEND_TO,
-    );
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
 }
 
 /// Last resolved claim ledger for `(holder, policy_id)`. Returns `None` if no claim has been resolved.
@@ -1580,11 +1610,7 @@ pub fn get_asset_premium_table(
 }
 
 /// Persist an asset-specific multiplier table.
-pub fn set_asset_premium_table(
-    env: &Env,
-    asset: &Address,
-    table: &crate::types::MultiplierTable,
-) {
+pub fn set_asset_premium_table(env: &Env, asset: &Address, table: &crate::types::MultiplierTable) {
     env.storage()
         .instance()
         .set(&DataKey::AssetPremiumTable(asset.clone()), table);
@@ -1680,13 +1706,20 @@ pub fn get_elevated_quorum_bps(env: &Env) -> u32 {
 
 // ── Issue #587: Asset-specific claim amount bounds ────────────────────────────
 
-pub fn set_allowed_asset_config(env: &Env, asset: &Address, config: &crate::types::AllowedAssetConfig) {
+pub fn set_allowed_asset_config(
+    env: &Env,
+    asset: &Address,
+    config: &crate::types::AllowedAssetConfig,
+) {
     env.storage()
         .instance()
         .set(&DataKey::AllowedAssetConfig(asset.clone()), config);
 }
 
-pub fn get_allowed_asset_config(env: &Env, asset: &Address) -> Option<crate::types::AllowedAssetConfig> {
+pub fn get_allowed_asset_config(
+    env: &Env,
+    asset: &Address,
+) -> Option<crate::types::AllowedAssetConfig> {
     env.storage()
         .instance()
         .get(&DataKey::AllowedAssetConfig(asset.clone()))
@@ -1725,7 +1758,9 @@ pub fn get_reinsurance_contract(env: &Env) -> Option<Address> {
 }
 
 pub fn clear_reinsurance_contract(env: &Env) {
-    env.storage().instance().remove(&DataKey::ReinsuranceContract);
+    env.storage()
+        .instance()
+        .remove(&DataKey::ReinsuranceContract);
 }
 
 // ── Appeal mechanism — voter snapshot (persistent) ────────────────────────────
@@ -1825,4 +1860,149 @@ pub fn set_whitelisted(env: &Env, holder: &Address, allowed: bool) {
             .instance()
             .remove(&DataKey::Whitelisted(holder.clone()));
     }
+}
+
+// ── Region registry ───────────────────────────────────────────────────────────
+
+pub fn get_region_registry(env: &Env) -> Map<String, crate::types::RegionConfig> {
+    env.storage()
+        .instance()
+        .get(&DataKey::RegionRegistry)
+        .unwrap_or_else(|| Map::new(env))
+}
+
+pub fn set_region_registry(env: &Env, registry: &Map<String, crate::types::RegionConfig>) {
+    env.storage()
+        .instance()
+        .set(&DataKey::RegionRegistry, registry);
+}
+
+pub fn get_region_config(env: &Env, code: &String) -> Option<crate::types::RegionConfig> {
+    get_region_registry(env).get(code.clone())
+}
+
+// ── Treatment tracking ──────────────────────────────────────────────────────
+
+pub fn increment_treatment_count(env: &Env, pet_id: u64) -> u64 {
+    let key = DataKey::TreatmentCount(pet_id);
+    let count: u64 = env.storage().persistent().get(&key).unwrap_or(0);
+    let next = count.saturating_add(1);
+    env.storage().persistent().set(&key, &next);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
+    next
+}
+
+pub fn get_treatment_count(env: &Env, pet_id: u64) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::TreatmentCount(pet_id))
+        .unwrap_or(0)
+}
+
+// ── Vet specialization registry ─────────────────────────────────────────────
+
+pub fn set_vet_specializations(
+    env: &Env,
+    vet: &Address,
+    specializations: &Vec<crate::types::Specialization>,
+) {
+    env.storage()
+        .instance()
+        .set(&DataKey::VetSpecializations(vet.clone()), specializations);
+}
+
+pub fn get_vet_specializations(env: &Env, vet: &Address) -> Vec<crate::types::Specialization> {
+    env.storage()
+        .instance()
+        .get(&DataKey::VetSpecializations(vet.clone()))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn vet_has_specialization(
+    env: &Env,
+    vet: &Address,
+    required: &crate::types::Specialization,
+) -> bool {
+    get_vet_specializations(env, vet).contains(required)
+}
+
+// ── Event subscription filter system ──────────────────────────────────────────
+
+pub fn next_subscription_id(env: &Env) -> u64 {
+    let next: u64 = env
+        .storage()
+        .instance()
+        .get(&DataKey::SubscriptionCounter)
+        .unwrap_or(0)
+        + 1;
+    env.storage()
+        .instance()
+        .set(&DataKey::SubscriptionCounter, &next);
+    next
+}
+
+pub fn set_subscription(env: &Env, sub: &crate::types::Subscription) {
+    let key = DataKey::Subscription(sub.id);
+    env.storage().persistent().set(&key, sub);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
+}
+
+pub fn get_subscription(env: &Env, id: u64) -> Option<crate::types::Subscription> {
+    env.storage().persistent().get(&DataKey::Subscription(id))
+}
+
+pub fn remove_subscription(env: &Env, id: u64) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::Subscription(id));
+}
+
+pub fn get_owner_subscription_ids(env: &Env, owner: &Address) -> Vec<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::OwnerSubscriptionIds(owner.clone()))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn set_owner_subscription_ids(env: &Env, owner: &Address, ids: &Vec<u64>) {
+    let key = DataKey::OwnerSubscriptionIds(owner.clone());
+    env.storage().persistent().set(&key, ids);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
+}
+
+// ── Treasury depositor allowlist ──────────────────────────────────────────────
+
+pub fn is_authorized_depositor(env: &Env, depositor: &Address) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::AuthorizedDepositor(depositor.clone()))
+        .unwrap_or(false)
+}
+
+pub fn set_authorized_depositor(env: &Env, depositor: &Address, allowed: bool) {
+    env.storage()
+        .instance()
+        .set(&DataKey::AuthorizedDepositor(depositor.clone()), &allowed);
+}
+
+// ── Contract payout recipient allowlist ───────────────────────────────────────
+
+pub fn is_allowed_payout_recipient(env: &Env, recipient: &Address) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::AllowedPayoutRecipient(recipient.clone()))
+        .unwrap_or(false)
+}
+
+pub fn set_allowed_payout_recipient(env: &Env, recipient: &Address, allowed: bool) {
+    env.storage().instance().set(
+        &DataKey::AllowedPayoutRecipient(recipient.clone()),
+        &allowed,
+    );
 }

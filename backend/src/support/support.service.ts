@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
+import { SupportTicket } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CaptchaService } from './captcha.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
@@ -140,14 +141,14 @@ export class SupportService {
       .digest('hex');
   }
 
-  private mapToResponse(ticket: any) {
+  private mapToResponse(ticket: SupportTicket) {
     return {
       id: ticket.id,
       email: ticket.email,
       subject: ticket.subject,
       message: ticket.message,
       status: ticket.status,
-      ipHash: ticket.ipHash,
+      ipHash: ticket.ipHash ?? '',
       createdAt: ticket.createdAt,
       updatedAt: ticket.updatedAt,
     };

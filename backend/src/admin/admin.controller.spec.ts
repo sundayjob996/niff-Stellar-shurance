@@ -12,7 +12,8 @@ import { QueueMonitorService } from '../queues/queue-monitor.service';
 import { AdminRoleGuard } from './guards/admin-role.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SolvencyMonitoringService } from '../maintenance/solvency-monitoring.service';
-import { SorobanService } from '../rpc/soroban.service';
+import { AdminTenantsService } from './admin-tenants.service';
+import { AdminStatsService } from './admin-stats.service';
 
 const mockAdminService = {
   enqueueReindex: jest.fn(),
@@ -20,7 +21,6 @@ const mockAdminService = {
   getBackfillJob: jest.fn(),
   setFeatureFlag: jest.fn(),
   getFeatureFlags: jest.fn(),
-  getReindexStatus: jest.fn(),
 };
 const mockAdminPoliciesService = {
   listPolicies: jest.fn(),
@@ -41,8 +41,11 @@ const mockQueueMonitorService = {
   replayJob: jest.fn(),
   getQueues: jest.fn().mockReturnValue([]),
 };
-const mockSorobanService = {
-  tryEmitClaimStatusOverrideEvent: jest.fn(),
+const mockAdminStatsService = {
+  getStats: jest.fn(),
+};
+const mockAdminTenantsService = {
+  listTenants: jest.fn(),
 };
 
 const adminReq = (role = 'admin', scopes: string[] = ['admin:claims:override']) =>
@@ -83,7 +86,8 @@ describe('AdminController', () => {
           provide: SolvencyMonitoringService,
           useValue: mockSolvencyMonitoringService,
         },
-        { provide: SorobanService, useValue: mockSorobanService },
+        { provide: AdminStatsService, useValue: mockAdminStatsService },
+        { provide: AdminTenantsService, useValue: mockAdminTenantsService },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -128,40 +132,6 @@ describe('AdminController', () => {
       mockAdminService.enqueueReindex.mockResolvedValue('job-456');
       await controller.reindex({ fromLedger: 100, network: 'public' }, adminReq());
       expect(mockAdminService.enqueueReindex).toHaveBeenCalledWith(100, 'public');
-    });
-  });
-
-  // ── GET /admin/reindex/status ────────────────────────────────────────────
-
-  describe('GET /admin/reindex/status', () => {
-    it('returns progress for the default network', async () => {
-      const mockStatus = {
-        jobId: 'reindex-testnet-500-ts',
-        network: 'testnet',
-        currentLedger: 750,
-        targetLedger: 1000,
-        percentage: 50,
-        status: 'running',
-        startedAt: new Date('2026-01-01'),
-      };
-      mockAdminService.getReindexStatus.mockResolvedValue(mockStatus);
-      const result = await controller.getReindexStatus(undefined);
-      expect(result).toEqual(mockStatus);
-      expect(mockAdminService.getReindexStatus).toHaveBeenCalledWith('testnet');
-    });
-
-    it('uses explicit network query param', async () => {
-      mockAdminService.getReindexStatus.mockResolvedValue({
-        jobId: 'j', network: 'mainnet', currentLedger: 100, targetLedger: 200,
-        percentage: 50, status: 'running', startedAt: new Date(),
-      });
-      await controller.getReindexStatus('mainnet');
-      expect(mockAdminService.getReindexStatus).toHaveBeenCalledWith('mainnet');
-    });
-
-    it('throws NotFoundException when no progress row exists', async () => {
-      mockAdminService.getReindexStatus.mockResolvedValue(null);
-      await expect(controller.getReindexStatus(undefined)).rejects.toThrow('No reindex progress');
     });
   });
 
@@ -275,44 +245,6 @@ describe('AdminController', () => {
       expect(mockAuditService.write).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'policy_soft_delete' }),
       );
-    });
-  });
-
-  describe('POST /admin/claims/:id/override', () => {
-    it('updates claim status and writes audit before override', async () => {
-      mockAdminService.getClaimForOverride.mockResolvedValue({ id: 7, status: 'PENDING' });
-      mockAdminService.overrideClaimStatus.mockResolvedValue({ id: 7, status: 'APPROVED' });
-      mockSorobanService.tryEmitClaimStatusOverrideEvent.mockResolvedValue(undefined);
-
-      const result = await controller.overrideClaimStatus(
-        '7',
-        { newStatus: 'APPROVED' as never, reason: 'manual review complete' },
-        adminReq(),
-      );
-
-      expect(mockAuditService.write).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: 'claim_status_override',
-          payload: expect.objectContaining({
-            claimId: 7,
-            oldStatus: 'PENDING',
-            newStatus: 'APPROVED',
-            reason: 'manual review complete',
-          }),
-        }),
-      );
-      expect(mockAdminService.overrideClaimStatus).toHaveBeenCalledWith(7, 'APPROVED');
-      expect(result).toEqual({ claimId: 7, oldStatus: 'PENDING', newStatus: 'APPROVED', status: 'updated' });
-    });
-
-    it('rejects callers without elevated scope', async () => {
-      await expect(
-        controller.overrideClaimStatus(
-          '7',
-          { newStatus: 'APPROVED' as never, reason: 'manual review complete' },
-          adminReq('admin', []),
-        ),
-      ).rejects.toThrow(ForbiddenException);
     });
   });
 
@@ -468,6 +400,8 @@ describe('Admin Role Guard Enforcement', () => {
           provide: SolvencyMonitoringService,
           useValue: mockSolvencyMonitoringService,
         },
+        { provide: AdminStatsService, useValue: mockAdminStatsService },
+        { provide: AdminTenantsService, useValue: mockAdminTenantsService },
       ],
     })
       .overrideGuard(JwtAuthGuard)

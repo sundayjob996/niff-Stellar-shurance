@@ -31,7 +31,7 @@ pub enum PolicyError {
     /// Policy struct failed internal validation.
     PolicyValidation = 106,
     /// Invalid or empty metadata URI.
-    InvalidMetadataUri = 121,
+    InvalidMetadataUri = 120,
     /// Caller is not authorized.
     Unauthorized = 107,
     /// Age out of range (1..=120).
@@ -294,6 +294,41 @@ pub fn map_quote_error(env: &Env, err: Error) -> QuoteFailure {
             "minimum solvency ratio basis points outside documented bounds"
         },
         Error::ClaimBatchTooLarge => "claim batch exceeds maximum allowed IDs per call",
+        Error::InvalidEvidenceUrl => "evidence URL does not match IPFS or allowlisted gateway format",
+        Error::ClaimEvidenceUpdateNotAllowed => {
+            "claim evidence cannot be updated after voting has started"
+        }
+        Error::EvidenceCountOutOfBounds => "evidence count is outside configured min/max bounds",
+        Error::ZeroTreasuryDeposit => "treasury deposit amount must be greater than zero",
+        Error::UnauthorizedTreasuryDepositor => {
+            "caller is not authorized to deposit treasury capital"
+        }
+        Error::PayoutRecipientContractNotAllowlisted => {
+            "contract payout recipient is not on the allowlist"
+        }
+        Error::ClaimBelowMinAmount => "claim amount is below the asset-specific minimum",
+        Error::ClaimAboveMaxAmount => "claim amount exceeds the asset-specific maximum",
+        Error::DelegationInvalid => "delegation not found or expired",
+        Error::DelegationPermissionDenied => "operator lacks required delegation permission",
+        Error::NoReinsuranceConfigured => {
+            "primary treasury insufficient and no reinsurance configured"
+        }
+        Error::OverDisbursement => "installment amount exceeds remaining unpaid claim balance",
+        Error::PolicyTransferInvalid => "policy transfer target is invalid",
+        Error::DisputeWindowActive => "payout blocked while dispute window is active",
+        Error::AppealWindowClosed => "appeal window has closed",
+        Error::AppealAlreadyUsed => "claim has already used its allowed appeal",
+        Error::InsufficientEvidence => "claim evidence count is below the minimum requirement",
+        Error::CooldownActive => "policy claim cooldown window has not elapsed",
+        Error::CalculatorVersionMismatch => {
+            "premium calculator config version is incompatible with this contract"
+        }
+        Error::CommitRevealNotSet => "commit-reveal voting phases are not configured for this claim",
+        Error::CommitPhaseEnded => "commit phase has ended for this claim",
+        Error::RevealPhaseNotOpen => "reveal phase is not open yet for this claim",
+        Error::RevealPhaseEnded => "reveal phase has ended for this claim",
+        Error::CommitmentNotFound => "no vote commitment found for this voter",
+        Error::CommitmentMismatch => "revealed vote does not match the prior commitment",
     };
     QuoteFailure {
         code: err as u32,
@@ -312,8 +347,8 @@ pub fn check_solvency_ratio(env: &Env, asset: &Address, new_coverage: i128) -> b
         return false;
     }
 
-    let obligations = storage::outstanding_approved_claim_obligations(env, asset)
-        .saturating_add(new_coverage);
+    let obligations =
+        storage::outstanding_approved_claim_obligations(env, asset).saturating_add(new_coverage);
     if obligations <= 0 {
         return true;
     }
@@ -350,6 +385,7 @@ pub fn initiate_policy(
     deductible: Option<i128>,
     expected_nonce: Option<u64>,
     metadata_uri: String,
+    region_code: Option<String>,
 ) -> Result<Policy, PolicyError> {
     // Check granular pause: policy binding should be blocked if bind_paused
     storage::assert_bind_not_paused(env);
@@ -376,11 +412,13 @@ pub fn initiate_policy(
     // Region registry validation: if the registry is non-empty, the supplied
     // region_code must exist and be active.
     let region_registry = storage::get_region_registry(env);
-    let region_risk_multiplier = if region_registry.len() == 0 {
+    let region_risk_multiplier = if region_registry.is_empty() {
         premium::SCALE
     } else {
         let code = region_code.ok_or(PolicyError::InvalidRegion)?;
-        let config = region_registry.get(code).ok_or(PolicyError::InvalidRegion)?;
+        let config = region_registry
+            .get(code)
+            .ok_or(PolicyError::InvalidRegion)?;
         if !config.active {
             return Err(PolicyError::InvalidRegion);
         }
@@ -420,15 +458,21 @@ pub fn initiate_policy(
 
     // Compute premium via the calculator (external or local fallback).
     // Pass the policy asset so asset-specific tables are used when configured.
-    let quote =
-        crate::calculator::compute_quote(env, &input, base_amount, false, QUOTE_TTL_LEDGERS, Some(&asset))
-            .map_err(|e| match e {
-                validate::Error::CalculatorPaused => PolicyError::ContractPaused,
-                validate::Error::CalculatorCallFailed | validate::Error::CalculatorNotSet => {
-                    PolicyError::PremiumOverflow
-                }
-                _ => PolicyError::PremiumOverflow,
-            })?;
+    let quote = crate::calculator::compute_quote(
+        env,
+        &input,
+        base_amount,
+        false,
+        QUOTE_TTL_LEDGERS,
+        Some(&asset),
+    )
+    .map_err(|e| match e {
+        validate::Error::CalculatorPaused => PolicyError::ContractPaused,
+        validate::Error::CalculatorCallFailed | validate::Error::CalculatorNotSet => {
+            PolicyError::PremiumOverflow
+        }
+        _ => PolicyError::PremiumOverflow,
+    })?;
     let premium_amount = premium::checked_mul_ratio(
         quote.total_premium,
         region_risk_multiplier,
@@ -776,15 +820,19 @@ pub fn renew_policy(
         safety_score,
     };
 
-    let quote =
-        crate::calculator::compute_quote(env, &input, policy.coverage, false, QUOTE_TTL_LEDGERS, Some(&policy.asset))
-            .map_err(|e| match e {
-                Error::CalculatorPaused => PolicyError::ContractPaused,
-                Error::CalculatorCallFailed | Error::CalculatorNotSet => {
-                    PolicyError::PremiumOverflow
-                }
-                _ => PolicyError::PremiumOverflow,
-            })?;
+    let quote = crate::calculator::compute_quote(
+        env,
+        &input,
+        policy.coverage,
+        false,
+        QUOTE_TTL_LEDGERS,
+        Some(&policy.asset),
+    )
+    .map_err(|e| match e {
+        Error::CalculatorPaused => PolicyError::ContractPaused,
+        Error::CalculatorCallFailed | Error::CalculatorNotSet => PolicyError::PremiumOverflow,
+        _ => PolicyError::PremiumOverflow,
+    })?;
 
     let premium_amount = quote.total_premium;
     if premium_amount <= 0 {
@@ -847,8 +895,7 @@ pub fn transfer_policy(
         return Err(Error::PolicyTransferInvalid);
     }
 
-    let mut policy =
-        storage::get_policy(env, holder, policy_id).ok_or(Error::PolicyNotFound)?;
+    let mut policy = storage::get_policy(env, holder, policy_id).ok_or(Error::PolicyNotFound)?;
 
     if !policy.is_active {
         return Err(Error::PolicyInactive);

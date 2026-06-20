@@ -114,13 +114,13 @@ export class SorobanService implements OnModuleInit, OnModuleDestroy {
 
   private initCircuitBreaker(): void {
     this.circuitBreaker = new CircuitBreaker(
-      async (fn: () => Promise<any>) => fn(),
+      async (fn: () => Promise<unknown>) => fn(),
       {
         timeout: 30_000,
         maxFailures: this.cbThreshold,
         resetTimeout: this.cbResetMs,
         name: 'SorobanRpcCircuitBreaker',
-      } as any,
+      },
     );
 
     this.circuitBreaker.on('open', () => {
@@ -662,7 +662,7 @@ export class SorobanService implements OnModuleInit, OnModuleDestroy {
           status: 'PENDING',
           hash: '',
           errorResult: 'Transaction queued for retry when RPC recovers',
-        } as any;
+        } as unknown as SorobanRpc.Api.SendTransactionResponse;
       }
       throw err;
     }

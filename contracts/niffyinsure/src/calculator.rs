@@ -81,10 +81,12 @@ pub trait PremiumCalculatorTrait {
 const CALC_EXPECTED_VERSION_KEY: &str = "calc_exp_ver";
 
 /// Store the expected calculator version in instance storage.
+#[allow(dead_code)]
 pub fn set_expected_calc_version(env: &Env, version: u32) {
-    env.storage()
-        .instance()
-        .set(&soroban_sdk::Symbol::new(env, CALC_EXPECTED_VERSION_KEY), &version);
+    env.storage().instance().set(
+        &soroban_sdk::Symbol::new(env, CALC_EXPECTED_VERSION_KEY),
+        &version,
+    );
 }
 
 /// Read the expected calculator version (None = version check disabled).
@@ -95,6 +97,7 @@ pub fn get_expected_calc_version(env: &Env) -> Option<u32> {
 }
 
 /// Remove the expected calculator version (disables version check).
+#[allow(dead_code)]
 pub fn clear_expected_calc_version(env: &Env) {
     env.storage()
         .instance()
@@ -105,11 +108,8 @@ pub fn clear_expected_calc_version(env: &Env) {
 /// Both are written together or neither is written (Soroban transactions are atomic).
 ///
 /// Pass `expected_version = 0` to disable version checking.
-pub fn set_calculator_with_version(
-    env: &Env,
-    calculator: &Address,
-    expected_version: u32,
-) {
+#[allow(dead_code)]
+pub fn set_calculator_with_version(env: &Env, calculator: &Address, expected_version: u32) {
     storage::set_calc_address(env, calculator);
     if expected_version == 0 {
         clear_expected_calc_version(env);

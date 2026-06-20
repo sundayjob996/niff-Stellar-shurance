@@ -64,9 +64,8 @@ fn initiate(
         &1_000_000i128,
         token,
         &InitiatePolicyOptions {
-            beneficiary: None,
-            deductible: None,
             expected_nonce: nonce,
+            ..InitiatePolicyOptions::test_defaults(env)
         },
     );
 }
@@ -134,9 +133,8 @@ fn correct_nonce_passes_and_increments() {
         &1_000_000i128,
         &token,
         &InitiatePolicyOptions {
-            beneficiary: None,
-            deductible: None,
             expected_nonce: Some(1),
+            ..InitiatePolicyOptions::test_defaults(&env)
         },
     );
     assert!(
@@ -164,9 +162,8 @@ fn mismatched_nonce_reverts() {
         &1_000_000i128,
         &token,
         &InitiatePolicyOptions {
-            beneficiary: None,
-            deductible: None,
             expected_nonce: Some(1),
+            ..InitiatePolicyOptions::test_defaults(&env)
         },
     );
     assert!(result.is_err(), "wrong nonce must revert");
@@ -195,9 +192,8 @@ fn gap_nonce_reverts() {
         &1_000_000i128,
         &token,
         &InitiatePolicyOptions {
-            beneficiary: None,
-            deductible: None,
             expected_nonce: Some(2),
+            ..InitiatePolicyOptions::test_defaults(&env)
         },
     );
     assert!(result.is_err(), "gap nonce must revert");
