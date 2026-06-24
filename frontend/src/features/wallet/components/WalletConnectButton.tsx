@@ -1,11 +1,37 @@
 'use client'
 
 import { useState } from 'react'
-import { Copy, Check, Wallet, ChevronDown } from 'lucide-react'
+import { Copy, Check, Wallet, ChevronDown, ShieldCheck, Clock, ShieldX } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useWallet } from '../hooks/useWallet'
+import { useWhitelistStatus } from '../hooks/useWhitelistStatus'
 import { truncateAddress } from '../utils/truncateAddress'
 import { WalletConnectModal } from './WalletConnectModal'
+
+function WhitelistIndicator() {
+  const { whitelistEnabled, status, isLoading } = useWhitelistStatus()
+
+  if (!whitelistEnabled || isLoading) return null
+
+  const config = {
+    verified: { icon: ShieldCheck, label: 'Verified', className: 'text-green-600' },
+    pending: { icon: Clock, label: 'Pending', className: 'text-yellow-600' },
+    not_eligible: { icon: ShieldX, label: 'Not eligible', className: 'text-red-600' },
+  } as const
+
+  if (!status) return null
+  const { icon: Icon, label, className } = config[status]
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium ${className}`}
+      title={`KYC status: ${label}`}
+    >
+      <Icon className="h-3 w-3" aria-hidden="true" />
+      {label}
+    </span>
+  )
+}
 
 export function WalletConnectButton() {
   const { address, connectionStatus, disconnect } = useWallet()
@@ -25,6 +51,7 @@ export function WalletConnectButton() {
   if (isConnected) {
     return (
       <div className="flex items-center gap-2">
+        <WhitelistIndicator />
         <button
           onClick={handleCopy}
           title="Click to copy address"
