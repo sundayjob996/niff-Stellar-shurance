@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Download, Loader2, RefreshCw, ShieldAlert } from 'lucide-react'
+import { Download, Loader2, RefreshCw, ShieldAlert, Info } from 'lucide-react'
 import Link from 'next/link'
 
 import { Button } from '@/components/ui/button'
@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
 import { useAuth } from '@/lib/hooks/useAuth'
 import { adminApi, type AuditEntry, type FeatureFlag, type SolvencySnapshot } from '@/lib/api/admin'
 import { getConfig } from '@/config/env'
@@ -29,6 +30,40 @@ function isStaff(jwt: string | null): boolean {
   } catch {
     return false
   }
+}
+
+// ── Contract version widget ───────────────────────────────────────────────
+
+function ContractVersionBadge() {
+  const [version, setVersion] = useState<string | null>(null)
+  const { network, contractId } = getConfig()
+
+  useEffect(() => {
+    const { apiUrl } = getConfig()
+    fetch(`${apiUrl}/api/chain/contract-metadata`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.version) setVersion(data.version)
+      })
+      .catch(() => {})
+  }, [])
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+      {version && (
+        <Badge variant="outline" className="gap-1 font-mono">
+          <Info className="h-3 w-3" aria-hidden="true" />
+          v{version}
+        </Badge>
+      )}
+      <Badge variant="secondary" className="font-mono text-xs">{network}</Badge>
+      {contractId && (
+        <span className="font-mono text-xs truncate max-w-[12rem]" title={contractId}>
+          {contractId}
+        </span>
+      )}
+    </div>
+  )
 }
 
 // ── Root component ─────────────────────────────────────────────────────────
@@ -64,7 +99,10 @@ export default function AdminPage() {
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8 space-y-8">
-      <h1 className="text-2xl font-semibold">Admin Dashboard</h1>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-2xl font-semibold">Admin Dashboard</h1>
+        <ContractVersionBadge />
+      </div>
       <div className="grid gap-6 md:grid-cols-2">
         <SolvencyWidget jwt={jwt} />
         <ReindexWidget jwt={jwt} />
