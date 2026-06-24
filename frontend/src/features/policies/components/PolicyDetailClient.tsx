@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Clock, FileText, Shield } from 'lucide-react'
+import { AlertCircle, AlertTriangle, Clock, FileText, Shield } from 'lucide-react'
 
 import { useWallet } from '@/features/wallet'
 import { RenewModal } from './RenewModal'
@@ -23,6 +23,7 @@ interface PolicyDetailClientProps {
 
 const LEDGER_CLOSE_SECONDS = 5
 const RENEWAL_WINDOW_LEDGERS = 30 * 24 * 60 * 60 / LEDGER_CLOSE_SECONDS
+const GRACE_PERIOD_LEDGERS = 17_280
 
 function formatStroopsToXLM(stroops: string): string {
   const num = BigInt(stroops)
@@ -78,6 +79,9 @@ export function PolicyDetailClient({ initialPolicy, policyId }: PolicyDetailClie
   const secondsRemaining = ledgersRemaining * LEDGER_CLOSE_SECONDS
   const isInRenewalWindow = ledgersRemaining > 0 && ledgersRemaining <= RENEWAL_WINDOW_LEDGERS
   const isExpired = ledgersRemaining <= 0
+  const graceLedgersRemaining = isExpired ? GRACE_PERIOD_LEDGERS + ledgersRemaining : 0
+  const isInGracePeriod = isExpired && graceLedgersRemaining > 0
+  const graceSecondsRemaining = graceLedgersRemaining * LEDGER_CLOSE_SECONDS
   const connected = connectionStatus === 'connected'
   const isHolder = connected && address === policy.holder
   const beneficiary = (policy as PolicyDto & { beneficiary?: string | null }).beneficiary ?? null
@@ -132,8 +136,22 @@ export function PolicyDetailClient({ initialPolicy, policyId }: PolicyDetailClie
       <Card>
         <CardHeader><CardTitle className="flex items-center gap-2"><Clock className="h-5 w-5" />Expiry Countdown</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          {isExpired ? (
+          {isExpired && !isInGracePeriod ? (
             <p className="text-lg font-semibold text-red-600">Policy expired</p>
+          ) : isInGracePeriod ? (
+            <>
+              <p className="text-lg font-semibold text-red-600">Policy expired</p>
+              <div className="flex gap-2 p-3 bg-amber-50 border border-amber-200 rounded-md">
+                <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <p className="font-medium text-amber-900">Grace period active — renew now to avoid a coverage gap</p>
+                  <p className="text-amber-700 mt-1">
+                    <span className="text-xl font-bold">{formatDuration(graceSecondsRemaining)}</span>{' '}
+                    remaining ({graceLedgersRemaining.toLocaleString()} ledgers)
+                  </p>
+                </div>
+              </div>
+            </>
           ) : (
             <>
               <div>
@@ -180,10 +198,10 @@ export function PolicyDetailClient({ initialPolicy, policyId }: PolicyDetailClie
         </CardContent>
       </Card>
 
-      {isHolder && policy.is_active && (
+      {isHolder && (policy.is_active || isInGracePeriod) && (
         <div className="flex gap-3 flex-wrap">
-          <Button onClick={() => setRenewModalOpen(true)} disabled={!isInRenewalWindow} title={!isInRenewalWindow ? `Renewal available in the last 30 days before expiry (${Math.max(0, ledgersRemaining - RENEWAL_WINDOW_LEDGERS)} ledgers remaining)` : undefined}>Renew Policy</Button>
-          <Button variant="destructive" onClick={() => setTerminateModalOpen(true)}>Terminate Policy</Button>
+          <Button onClick={() => setRenewModalOpen(true)} disabled={!isInRenewalWindow && !isInGracePeriod} title={!isInRenewalWindow && !isInGracePeriod ? `Renewal available in the last 30 days before expiry (${Math.max(0, ledgersRemaining - RENEWAL_WINDOW_LEDGERS)} ledgers remaining)` : undefined}>Renew Policy</Button>
+          {policy.is_active && <Button variant="destructive" onClick={() => setTerminateModalOpen(true)}>Terminate Policy</Button>}
         </div>
       )}
 
