@@ -1,7 +1,8 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { ShieldCheck, ShieldX, Loader2 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -44,6 +45,52 @@ function formatTimestamp(timestamp: string) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(timestamp))
+}
+
+async function computeSha256(url: string): Promise<string> {
+  const res = await fetch(url)
+  const buffer = await res.arrayBuffer()
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+function EvidenceHashVerifier({ hash, evidenceUrl }: { hash: string; evidenceUrl: string }) {
+  const [status, setStatus] = useState<'idle' | 'verifying' | 'valid' | 'invalid'>('idle')
+
+  const handleVerify = useCallback(async () => {
+    setStatus('verifying')
+    try {
+      const computed = await computeSha256(evidenceUrl)
+      setStatus(computed.toLowerCase() === hash.toLowerCase() ? 'valid' : 'invalid')
+    } catch {
+      setStatus('invalid')
+    }
+  }, [hash, evidenceUrl])
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-mono text-muted-foreground break-all">
+        SHA-256: {hash}
+      </p>
+      <Button
+        variant="outline"
+        size="sm"
+        className="gap-1.5"
+        onClick={handleVerify}
+        disabled={status === 'verifying'}
+      >
+        {status === 'verifying' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+        {status === 'valid' && <ShieldCheck className="w-3.5 h-3.5 text-green-600" />}
+        {status === 'invalid' && <ShieldX className="w-3.5 h-3.5 text-red-600" />}
+        {status === 'idle' && 'Verify integrity'}
+        {status === 'verifying' && 'Verifying…'}
+        {status === 'valid' && 'Integrity verified'}
+        {status === 'invalid' && 'Hash mismatch'}
+      </Button>
+    </div>
+  )
 }
 
 export function ClaimDetailView({ claimId }: ClaimDetailViewProps) {
@@ -182,10 +229,8 @@ export function ClaimDetailView({ claimId }: ClaimDetailViewProps) {
                 </Button>
               </div>
             )}
-            {!evidencePreview && evidenceUrl && (
-              <p className="text-xs text-muted-foreground">
-                Evidence file served via gateway: {claim.evidence.hash}
-              </p>
+            {claim.evidence.hash && (
+              <EvidenceHashVerifier hash={claim.evidence.hash} evidenceUrl={evidenceUrl} />
             )}
           </CardContent>
         </Card>

@@ -1,9 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import Image from 'next/image'
 import { useQuery } from '@tanstack/react-query'
-import { X, ChevronLeft, ChevronRight, Download, FileText, ZoomIn, ZoomOut } from 'lucide-react'
+import { X, ChevronLeft, ChevronRight, Download, FileText, ZoomIn, ZoomOut, ShieldCheck, ShieldX, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { getConfig } from '@/config/env'
@@ -37,13 +37,64 @@ function useEvidence(claimId: number, index: number) {
   })
 }
 
+async function verifyIntegrity(blobUrl: string, expectedHash: string): Promise<boolean> {
+  const res = await fetch(blobUrl)
+  const buffer = await res.arrayBuffer()
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  const computedHash = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
+  return computedHash.toLowerCase() === expectedHash.toLowerCase()
+}
+
+function HashDisplay({ hash, blobUrl }: { hash: string; blobUrl?: string }) {
+  const [status, setStatus] = useState<'idle' | 'verifying' | 'valid' | 'invalid'>('idle')
+
+  const handleVerify = useCallback(async () => {
+    if (!blobUrl) return
+    setStatus('verifying')
+    try {
+      const valid = await verifyIntegrity(blobUrl, hash)
+      setStatus(valid ? 'valid' : 'invalid')
+    } catch {
+      setStatus('invalid')
+    }
+  }, [blobUrl, hash])
+
+  return (
+    <div className="mt-1 space-y-1">
+      <p className="text-[10px] font-mono text-muted-foreground break-all leading-tight">
+        SHA-256: {hash}
+      </p>
+      {blobUrl && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-xs gap-1"
+          onClick={handleVerify}
+          disabled={status === 'verifying'}
+        >
+          {status === 'verifying' && <Loader2 className="w-3 h-3 animate-spin" />}
+          {status === 'valid' && <ShieldCheck className="w-3 h-3 text-green-600" />}
+          {status === 'invalid' && <ShieldX className="w-3 h-3 text-red-600" />}
+          {status === 'idle' && 'Verify'}
+          {status === 'verifying' && 'Verifying…'}
+          {status === 'valid' && 'Integrity verified'}
+          {status === 'invalid' && 'Hash mismatch'}
+        </Button>
+      )}
+    </div>
+  )
+}
+
 function Thumbnail({
   claimId,
   index,
+  hash,
   onClick,
 }: {
   claimId: number
   index: number
+  hash?: string
   onClick: () => void
 }) {
   const { data, isLoading } = useEvidence(claimId, index)
@@ -53,28 +104,29 @@ function Thumbnail({
   }
   if (!data) return null
 
-  if (isPdf(data.contentType)) {
-    return (
-      <button
-        onClick={onClick}
-        className="w-24 h-24 rounded border flex flex-col items-center justify-center gap-1 hover:bg-muted transition-colors"
-        aria-label={`PDF evidence ${index + 1}`}
-      >
-        <FileText className="w-8 h-8 text-muted-foreground" />
-        <span className="text-xs text-muted-foreground">PDF</span>
-      </button>
-    )
-  }
-
   return (
-    <button
-      onClick={onClick}
-      className="relative w-24 h-24 rounded border overflow-hidden hover:opacity-80 transition-opacity"
-      aria-label={`Image evidence ${index + 1}`}
-    >
-      <Image src={data.url} alt={`Evidence ${index + 1}`} fill className="object-cover" />
-      <ZoomIn className="absolute bottom-1 right-1 w-4 h-4 text-white drop-shadow" />
-    </button>
+    <div className="flex flex-col items-start">
+      {isPdf(data.contentType) ? (
+        <button
+          onClick={onClick}
+          className="w-24 h-24 rounded border flex flex-col items-center justify-center gap-1 hover:bg-muted transition-colors"
+          aria-label={`PDF evidence ${index + 1}`}
+        >
+          <FileText className="w-8 h-8 text-muted-foreground" />
+          <span className="text-xs text-muted-foreground">PDF</span>
+        </button>
+      ) : (
+        <button
+          onClick={onClick}
+          className="relative w-24 h-24 rounded border overflow-hidden hover:opacity-80 transition-opacity"
+          aria-label={`Image evidence ${index + 1}`}
+        >
+          <Image src={data.url} alt={`Evidence ${index + 1}`} fill className="object-cover" />
+          <ZoomIn className="absolute bottom-1 right-1 w-4 h-4 text-white drop-shadow" />
+        </button>
+      )}
+      {hash && <HashDisplay hash={hash} blobUrl={data.url} />}
+    </div>
   )
 }
 
@@ -208,9 +260,11 @@ export interface EvidenceGalleryProps {
   claimId: number
   /** Total number of evidence items on the claim */
   count: number
+  /** SHA-256 commitment hashes keyed by evidence index */
+  hashes?: Record<number, string>
 }
 
-export function EvidenceGallery({ claimId, count }: EvidenceGalleryProps) {
+export function EvidenceGallery({ claimId, count, hashes }: EvidenceGalleryProps) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const indices = Array.from({ length: count }, (_, i) => i)
 
@@ -221,7 +275,7 @@ export function EvidenceGallery({ claimId, count }: EvidenceGalleryProps) {
       <div className="flex flex-wrap gap-3" role="list" aria-label="Evidence gallery">
         {indices.map((i) => (
           <div key={i} role="listitem">
-            <Thumbnail claimId={claimId} index={i} onClick={() => setLightboxIndex(i)} />
+            <Thumbnail claimId={claimId} index={i} hash={hashes?.[i]} onClick={() => setLightboxIndex(i)} />
           </div>
         ))}
       </div>
