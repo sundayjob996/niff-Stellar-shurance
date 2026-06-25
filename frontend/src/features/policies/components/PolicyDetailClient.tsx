@@ -23,6 +23,8 @@ interface PolicyDetailClientProps {
 
 const LEDGER_CLOSE_SECONDS = 5
 const RENEWAL_WINDOW_LEDGERS = 30 * 24 * 60 * 60 / LEDGER_CLOSE_SECONDS
+// Must match contracts/niffyinsure/src/ledger.rs DEFAULT_GRACE_PERIOD_LEDGERS = 17_280 (~1 day)
+const DEFAULT_GRACE_PERIOD_LEDGERS = 17_280
 
 function formatStroopsToXLM(stroops: string): string {
   const num = BigInt(stroops)
@@ -77,7 +79,11 @@ export function PolicyDetailClient({ initialPolicy, policyId }: PolicyDetailClie
   const ledgersRemaining = policy.expiry_countdown?.ledgers_remaining ?? 0
   const secondsRemaining = ledgersRemaining * LEDGER_CLOSE_SECONDS
   const isInRenewalWindow = ledgersRemaining > 0 && ledgersRemaining <= RENEWAL_WINDOW_LEDGERS
-  const isExpired = ledgersRemaining <= 0
+  // ledgers_remaining goes negative after expiry; grace ends at -DEFAULT_GRACE_PERIOD_LEDGERS
+  const isInGracePeriod = ledgersRemaining <= 0 && ledgersRemaining > -DEFAULT_GRACE_PERIOD_LEDGERS
+  const graceLedgersRemaining = isInGracePeriod ? ledgersRemaining + DEFAULT_GRACE_PERIOD_LEDGERS : 0
+  const graceSecondsRemaining = graceLedgersRemaining * LEDGER_CLOSE_SECONDS
+  const isExpired = ledgersRemaining <= -DEFAULT_GRACE_PERIOD_LEDGERS
   const connected = connectionStatus === 'connected'
   const isHolder = connected && address === policy.holder
   const beneficiary = (policy as PolicyDto & { beneficiary?: string | null }).beneficiary ?? null
@@ -132,14 +138,35 @@ export function PolicyDetailClient({ initialPolicy, policyId }: PolicyDetailClie
       <Card>
         <CardHeader><CardTitle className="flex items-center gap-2"><Clock className="h-5 w-5" />Expiry Countdown</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          {isExpired ? (
-            <p className="text-lg font-semibold text-red-600">Policy expired</p>
+          {isInGracePeriod ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3">
+                <AlertCircle className="h-5 w-5 text-amber-600 flex-shrink-0" aria-hidden="true" />
+                <div>
+                  <p className="font-semibold text-amber-900">Policy expired — grace period active</p>
+                  <p className="text-sm text-amber-700">Renew now to avoid a coverage gap.</p>
+                </div>
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-amber-700">{formatDuration(graceSecondsRemaining)}</p>
+                <p className="text-sm text-gray-500">{graceLedgersRemaining.toLocaleString()} ledgers left in grace period</p>
+              </div>
+              <p className="text-xs text-gray-400">ⓘ Grace period ends ~{formatDuration(graceSecondsRemaining)} from now. After this window closes, you will need to purchase a new policy.</p>
+            </div>
+          ) : isExpired ? (
+            <p className="text-lg font-semibold text-red-600">Policy expired — grace period has ended</p>
           ) : (
             <>
               <div>
                 <p className="text-2xl font-bold">{formatDuration(secondsRemaining)}</p>
                 <p className="text-sm text-gray-500">{ledgersRemaining.toLocaleString()} ledgers remaining</p>
               </div>
+              {isInRenewalWindow && (
+                <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2">
+                  <Clock className="h-4 w-4 text-blue-600 flex-shrink-0" aria-hidden="true" />
+                  <p className="text-sm text-blue-800">Renewal window is open — renew before expiry to maintain continuous coverage.</p>
+                </div>
+              )}
               <p className="text-xs text-gray-400">ⓘ Estimated time based on 5s average ledger close time. Displayed values may lag on-chain state by up to 15 seconds.</p>
             </>
           )}
@@ -182,7 +209,7 @@ export function PolicyDetailClient({ initialPolicy, policyId }: PolicyDetailClie
 
       {isHolder && policy.is_active && (
         <div className="flex gap-3 flex-wrap">
-          <Button onClick={() => setRenewModalOpen(true)} disabled={!isInRenewalWindow} title={!isInRenewalWindow ? `Renewal available in the last 30 days before expiry (${Math.max(0, ledgersRemaining - RENEWAL_WINDOW_LEDGERS)} ledgers remaining)` : undefined}>Renew Policy</Button>
+          <Button onClick={() => setRenewModalOpen(true)} disabled={!isInRenewalWindow && !isInGracePeriod} title={!isInRenewalWindow && !isInGracePeriod ? `Renewal available in the last 30 days before expiry (${Math.max(0, ledgersRemaining - RENEWAL_WINDOW_LEDGERS)} ledgers remaining)` : undefined}>Renew Policy</Button>
           <Button variant="destructive" onClick={() => setTerminateModalOpen(true)}>Terminate Policy</Button>
         </div>
       )}
